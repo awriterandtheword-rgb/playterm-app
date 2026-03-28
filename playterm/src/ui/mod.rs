@@ -29,13 +29,14 @@ pub fn render(app: &App, frame: &mut Frame) {
     match app.active_tab {
         Tab::Browser => {
             let areas = layout::build_browser(frame.area());
-            now_playing::render(app, frame, areas.now_playing);
             browser::render(app, frame, areas.center);
+            now_playing::render(app, frame, areas.now_playing);
             status_bar::render(app, frame, areas.status_bar);
         }
         Tab::NowPlaying => {
             let areas = layout::build_nowplaying(frame.area());
             nowplaying_tab::render(app, frame, areas.center);
+            now_playing::render(app, frame, areas.now_playing);
             status_bar::render(app, frame, areas.status_bar);
         }
     }

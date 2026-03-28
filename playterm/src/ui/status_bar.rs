@@ -16,7 +16,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         Span::styled("● ", Style::default().fg(ACCENT)),
         Span::styled(host, Style::default().fg(TEXT_MUTED)),
         Span::styled(
-            "  h/l columns  j/k scroll  Tab switch  a add  A add all  p play  q quit",
+            "  h/l columns  j/k scroll  Tab switch  a add  A add all  D clear  p play  q quit",
             Style::default().fg(TEXT_MUTED),
         ),
     ]);

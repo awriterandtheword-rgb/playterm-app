@@ -101,6 +101,7 @@ fn map_key(code: KeyCode, modifiers: KeyModifiers) -> Action {
         KeyCode::Char('N') => Action::PrevTrack,
         KeyCode::Char('+') | KeyCode::Char('=') => Action::VolumeUp,
         KeyCode::Char('-') => Action::VolumeDown,
+        KeyCode::Char('D') => Action::ClearQueue,
         _ => Action::None,
     }
 }

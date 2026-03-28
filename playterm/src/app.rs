@@ -326,6 +326,7 @@ impl App {
                 }
             }
             Action::VolumeUp | Action::VolumeDown => { /* Phase 2 */ }
+            Action::ClearQueue => self.handle_clear_queue(),
             Action::None => {}
         }
     }
@@ -507,7 +508,7 @@ impl App {
 
     fn handle_add_all_to_queue(&mut self) {
         match self.browser_focus {
-            BrowserColumn::Artists => {
+            BrowserColumn::Artists | BrowserColumn::Albums => {
                 // Fetch every album and every track for the selected artist,
                 // then push them all to the queue via AllTracksForArtist.
                 if let Some(artist) = self.library.current_artist() {
@@ -516,7 +517,7 @@ impl App {
                     self.fetch_all_tracks_for_artist(artist_id, start_playing);
                 }
             }
-            BrowserColumn::Albums | BrowserColumn::Tracks => {
+            BrowserColumn::Tracks => {
                 // Add every track in the selected album to the queue.
                 let album_id = match self.library.current_album() {
                     Some(a) => a.id.clone(),
@@ -535,5 +536,15 @@ impl App {
                 // If tracks not loaded yet: no-op; proactive loading makes this rare.
             }
         }
+    }
+
+    fn handle_clear_queue(&mut self) {
+        self.queue.songs.clear();
+        self.queue.cursor = 0;
+        self.queue.scroll = 0;
+        let _ = self.player_tx.send(PlayerCommand::Stop);
+        self.playback.current_song = None;
+        self.playback.elapsed = std::time::Duration::ZERO;
+        self.playback.paused = false;
     }
 }

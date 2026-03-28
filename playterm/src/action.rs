@@ -21,6 +21,7 @@ pub enum Action {
     PrevTrack,
     VolumeUp,
     VolumeDown,
+    ClearQueue,
     Quit,
     None,
 }
