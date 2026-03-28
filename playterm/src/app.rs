@@ -331,15 +331,12 @@ impl App {
             PlayerEvent::AboutToFinish => {
                 // Pre-load the next track for gapless playback.
                 if let Some(next) = self.queue.peek_next().cloned() {
-                    eprintln!("[app] AboutToFinish: enqueuing \"{}\"", next.title);
                     let url = self.subsonic.stream_url(&next.id, self.config.max_bit_rate);
                     let duration =
                         next.duration.map(|s| std::time::Duration::from_secs(u64::from(s)));
                     let _ = self
                         .player_tx
                         .send(PlayerCommand::EnqueueNext { url, duration });
-                } else {
-                    eprintln!("[app] AboutToFinish: no next track in queue");
                 }
             }
             PlayerEvent::TrackAdvanced => {
