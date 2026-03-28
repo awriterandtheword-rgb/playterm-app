@@ -286,8 +286,9 @@ impl App {
                     self.library.selected_track = Some(0);
                 }
             }
-            LibraryUpdate::AllTracksForArtist { songs, start_playing } => {
+            LibraryUpdate::AllTracksForArtist { mut songs, start_playing } => {
                 let was_empty = self.queue.songs.is_empty();
+                songs.sort_by_key(|s| (s.disc_number.unwrap_or(1), s.track.unwrap_or(0)));
                 for song in songs {
                     self.queue.push(song);
                 }
@@ -687,7 +688,9 @@ impl App {
                 };
                 if let Some(LoadingState::Loaded(songs)) = self.library.tracks.get(&album_id) {
                     let was_empty = self.queue.songs.is_empty();
-                    for song in songs.clone() {
+                    let mut sorted = songs.clone();
+                    sorted.sort_by_key(|s| (s.disc_number.unwrap_or(1), s.track.unwrap_or(0)));
+                    for song in sorted {
                         self.queue.push(song);
                     }
                     if was_empty && !self.queue.songs.is_empty() {
