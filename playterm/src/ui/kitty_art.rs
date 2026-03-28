@@ -15,25 +15,75 @@ use ratatui::layout::Rect;
 
 /// Returns `true` if the running terminal supports the Kitty graphics protocol.
 ///
-/// Checks environment variables set by known-compatible terminals:
-/// - `KITTY_WINDOW_ID` (native Kitty)
-/// - `TERM=xterm-kitty`
-/// - `TERM_PROGRAM=WezTerm`
+/// Sends a Kitty graphics query to `/dev/tty` and checks the response.
+/// Also appends a DA1 device-attributes query (`\x1b[c`) which every VT100+
+/// terminal answers unconditionally, guaranteeing the read thread terminates
+/// even on terminals that ignore the Kitty probe.
+///
+/// Must be called before `enable_raw_mode()` / `EnterAlternateScreen` so that
+/// the temporary raw-mode toggle does not interfere with the TUI startup.
 pub fn detect_kitty_support() -> bool {
-    if std::env::var("KITTY_WINDOW_ID").is_ok() {
-        return true;
+    use std::fs::OpenOptions;
+    use std::io::{Read, Write};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    // Open /dev/tty for bidirectional I/O (works even when stdin/stdout are pipes).
+    let mut tty = match OpenOptions::new().read(true).write(true).open("/dev/tty") {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let mut tty_read = match tty.try_clone() {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+
+    // Raw mode lets us read the response characters without waiting for Enter.
+    if crossterm::terminal::enable_raw_mode().is_err() {
+        return false;
     }
-    if let Ok(term) = std::env::var("TERM") {
-        if term == "xterm-kitty" {
-            return true;
+
+    // 1. Kitty graphics probe   – terminal replies \x1b_Gi=31;OK\x1b\\ if supported.
+    // 2. DA1 device-attributes  – always answered; provides a guaranteed read terminator.
+    let probe = b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c";
+    let write_ok = tty.write_all(probe).is_ok() && tty.flush().is_ok();
+    if !write_ok {
+        let _ = crossterm::terminal::disable_raw_mode();
+        return false;
+    }
+
+    // Read the response in a background thread so we can apply a hard timeout.
+    let (tx, rx) = mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        let mut response = Vec::with_capacity(128);
+        let mut byte = [0u8; 1];
+        loop {
+            match tty_read.read(&mut byte) {
+                Ok(1) => {
+                    response.push(byte[0]);
+                    // DA1 response format: \x1b[?{digits}c  — stop on 'c' after \x1b[?
+                    if byte[0] == b'c'
+                        && response.windows(3).any(|w| w == b"\x1b[?")
+                    {
+                        break;
+                    }
+                    if response.len() >= 256 {
+                        break;
+                    }
+                }
+                _ => break,
+            }
         }
-    }
-    if let Ok(prog) = std::env::var("TERM_PROGRAM") {
-        if prog == "WezTerm" {
-            return true;
-        }
-    }
-    false
+        let _ = tx.send(String::from_utf8_lossy(&response).into_owned());
+    });
+
+    let result = rx
+        .recv_timeout(Duration::from_millis(500))
+        .map(|r| r.contains("_Gi=31;OK"))
+        .unwrap_or(false);
+
+    let _ = crossterm::terminal::disable_raw_mode();
+    result
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────────

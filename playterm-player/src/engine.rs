@@ -115,11 +115,16 @@ fn player_thread(cmd_rx: mpsc::Receiver<PlayerCommand>, evt_tx: mpsc::Sender<Pla
             let elapsed = player.get_pos();
 
             // Detect gapless track transition: elapsed resets to near zero
-            // while we know a next track was appended.
+            // while we know a next track was appended.  Use a 2 s window rather
+            // than 500 ms to tolerate rodio's first-tick imprecision.
             if next_queued
-                && prev_elapsed > Duration::from_secs(1)
-                && elapsed < Duration::from_millis(500)
+                && prev_elapsed > Duration::from_secs(2)
+                && elapsed < Duration::from_secs(2)
             {
+                eprintln!(
+                    "[player] TrackAdvanced: prev={:.1?} → elapsed={:.1?}",
+                    prev_elapsed, elapsed
+                );
                 current_total = next_total.take();
                 next_queued = false;
                 about_to_finish_sent = false;
@@ -132,11 +137,17 @@ fn player_thread(cmd_rx: mpsc::Receiver<PlayerCommand>, evt_tx: mpsc::Sender<Pla
                 total: current_total,
             });
 
-            // Send AboutToFinish ~5 s before the end so the TUI can enqueue next.
+            // Send AboutToFinish ~10 s before the end so the TUI can enqueue next.
+            // 10 s gives enough headroom for: player-thread sleep (≤500 ms) +
+            // TUI dispatch latency + open_stream 256 KB prebuffer + decode.
             if !about_to_finish_sent && !next_queued {
                 if let Some(total) = current_total {
                     let remaining = total.saturating_sub(elapsed);
-                    if remaining <= Duration::from_secs(5) && remaining > Duration::ZERO {
+                    if remaining <= Duration::from_secs(10) && remaining > Duration::ZERO {
+                        eprintln!(
+                            "[player] AboutToFinish: elapsed={:.1?}, remaining={:.1?}",
+                            elapsed, remaining
+                        );
                         about_to_finish_sent = true;
                         let _ = evt_tx.send(PlayerEvent::AboutToFinish);
                     }
@@ -194,11 +205,13 @@ fn handle_command(
             }
         }
         PlayerCommand::EnqueueNext { url, duration } => {
+            eprintln!("[player] EnqueueNext: fetching stream…");
             match download_and_decode(&url) {
                 Ok(source) => {
                     *next_total = duration;
                     *next_queued = true;
                     player.append(source);
+                    eprintln!("[player] EnqueueNext: appended, next_queued=true");
                 }
                 Err(e) => {
                     let _ = evt_tx.send(PlayerEvent::Error(format!("enqueue error: {e}")));
