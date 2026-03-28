@@ -1,0 +1,10 @@
+[package]
+name = "playterm"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "playterm"
+path = "src/main.rs"
+
+[dependencies]
