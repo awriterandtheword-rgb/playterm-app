@@ -1,13 +1,15 @@
-pub mod artists;
 pub mod albums;
+pub mod artists;
+pub mod browser;
 pub mod layout;
 pub mod now_playing;
+pub mod nowplaying_tab;
 pub mod queue;
 pub mod status_bar;
 pub mod tracks;
 
 use ratatui::Frame;
-use crate::app::App;
+use crate::app::{App, Tab};
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 
@@ -24,18 +26,17 @@ pub const BORDER_ACTIVE: Color = Color::Rgb(58, 58, 58);
 // ── Top-level render ──────────────────────────────────────────────────────────
 
 pub fn render(app: &App, frame: &mut Frame) {
-    let areas = layout::build(frame.area());
-    now_playing::render(app, frame, areas.now_playing);
-    render_center(app, frame, areas.center);
-    status_bar::render(app, frame, areas.status_bar);
-}
-
-fn render_center(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
-    use crate::app::Pane;
-    match app.active_pane {
-        Pane::Artists => artists::render(app, frame, area),
-        Pane::Albums => albums::render(app, frame, area),
-        Pane::Tracks => tracks::render(app, frame, area),
-        Pane::Queue => queue::render(app, frame, area),
+    match app.active_tab {
+        Tab::Browser => {
+            let areas = layout::build_browser(frame.area());
+            now_playing::render(app, frame, areas.now_playing);
+            browser::render(app, frame, areas.center);
+            status_bar::render(app, frame, areas.status_bar);
+        }
+        Tab::NowPlaying => {
+            let areas = layout::build_nowplaying(frame.area());
+            nowplaying_tab::render(app, frame, areas.center);
+            status_bar::render(app, frame, areas.status_bar);
+        }
     }
 }

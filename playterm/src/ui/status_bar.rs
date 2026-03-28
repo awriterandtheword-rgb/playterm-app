@@ -15,7 +15,10 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     let line = Line::from(vec![
         Span::styled("● ", Style::default().fg(ACCENT)),
         Span::styled(host, Style::default().fg(TEXT_MUTED)),
-        Span::styled("  j/k navigate  Enter select  a add  p play/pause  q quit", Style::default().fg(TEXT_MUTED)),
+        Span::styled(
+            "  h/l columns  j/k scroll  Tab switch  a add  A add all  p play  q quit",
+            Style::default().fg(TEXT_MUTED),
+        ),
     ]);
 
     let para = Paragraph::new(line).style(Style::default().bg(BG));

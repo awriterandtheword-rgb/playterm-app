@@ -17,7 +17,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
 use action::{Action, Direction};
-use app::{App, Pane};
+use app::App;
 use config::Config;
 
 #[tokio::main]
@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
 }
 
 async fn run_loop(
-    terminal: &mut ratatui::Terminal<CrosstermBackend<io::Stdout>>,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
 ) -> Result<()> {
     loop {
@@ -64,13 +64,12 @@ async fn run_loop(
         // Poll for a key event (50 ms timeout keeps progress bar responsive).
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                let action = map_key(key.code, key.modifiers, app);
+                let action = map_key(key.code, key.modifiers);
                 app.dispatch(action);
             }
         }
 
-        // One more drain after dispatch so any enqueued play commands reflect
-        // immediately on the next frame.
+        // Drain once more so any triggered playback reflects on next frame.
         while let Ok(event) = app.player_rx.try_recv() {
             app.handle_player_event(event);
         }
@@ -82,9 +81,12 @@ async fn run_loop(
     Ok(())
 }
 
-fn map_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Action {
+fn map_key(code: KeyCode, modifiers: KeyModifiers) -> Action {
     match code {
         KeyCode::Char('q') => Action::Quit,
+        KeyCode::Tab => Action::SwitchTab,
+        KeyCode::Char('h') | KeyCode::Left => Action::FocusLeft,
+        KeyCode::Char('l') | KeyCode::Right => Action::FocusRight,
         KeyCode::Char('j') | KeyCode::Down => Action::Navigate(Direction::Down),
         KeyCode::Char('k') | KeyCode::Up => Action::Navigate(Direction::Up),
         KeyCode::Char('g') => Action::Navigate(Direction::Top),
@@ -99,11 +101,6 @@ fn map_key(code: KeyCode, modifiers: KeyModifiers, app: &App) -> Action {
         KeyCode::Char('N') => Action::PrevTrack,
         KeyCode::Char('+') | KeyCode::Char('=') => Action::VolumeUp,
         KeyCode::Char('-') => Action::VolumeDown,
-        KeyCode::Tab => Action::SwitchPane(app.active_pane.next()),
-        KeyCode::Char('1') => Action::SwitchPane(Pane::Artists),
-        KeyCode::Char('2') => Action::SwitchPane(Pane::Albums),
-        KeyCode::Char('3') => Action::SwitchPane(Pane::Tracks),
-        KeyCode::Char('4') => Action::SwitchPane(Pane::Queue),
         _ => Action::None,
     }
 }

@@ -3,11 +3,10 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
 
-use crate::app::{App, Pane};
+use crate::app::App;
 use super::{ACCENT, BG, BORDER, BORDER_ACTIVE, SURFACE, TEXT, TEXT_MUTED};
 
-pub fn render(app: &App, frame: &mut Frame, area: Rect) {
-    let is_active = app.active_pane == Pane::Queue;
+pub fn render(app: &App, frame: &mut Frame, area: Rect, is_active: bool) {
     let border_color = if is_active { BORDER_ACTIVE } else { BORDER };
     let title_color = if is_active { ACCENT } else { TEXT_MUTED };
 

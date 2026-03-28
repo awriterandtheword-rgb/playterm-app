@@ -8,26 +8,48 @@ use playterm_subsonic::SubsonicClient;
 
 use crate::action::{Action, Direction};
 use crate::config::Config;
-use crate::state::{LibraryState, PlaybackState, QueueState};
+use crate::state::{LibraryState, LoadingState, PlaybackState, QueueState};
 
-// ── Pane ──────────────────────────────────────────────────────────────────────
+// ── Tab ───────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Pane {
+pub enum Tab {
+    Browser,
+    NowPlaying,
+}
+
+impl Tab {
+    pub fn toggle(self) -> Self {
+        match self {
+            Tab::Browser => Tab::NowPlaying,
+            Tab::NowPlaying => Tab::Browser,
+        }
+    }
+}
+
+// ── BrowserColumn ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserColumn {
     Artists,
     Albums,
     Tracks,
-    Queue,
 }
 
-impl Pane {
-    /// Cycle to the next pane in tab order.
-    pub fn next(self) -> Self {
+impl BrowserColumn {
+    pub fn left(self) -> Self {
         match self {
-            Pane::Artists => Pane::Albums,
-            Pane::Albums => Pane::Tracks,
-            Pane::Tracks => Pane::Queue,
-            Pane::Queue => Pane::Artists,
+            BrowserColumn::Artists => BrowserColumn::Artists,
+            BrowserColumn::Albums => BrowserColumn::Artists,
+            BrowserColumn::Tracks => BrowserColumn::Albums,
+        }
+    }
+
+    pub fn right(self) -> Self {
+        match self {
+            BrowserColumn::Artists => BrowserColumn::Albums,
+            BrowserColumn::Albums => BrowserColumn::Tracks,
+            BrowserColumn::Tracks => BrowserColumn::Tracks,
         }
     }
 }
@@ -45,12 +67,19 @@ pub enum LibraryUpdate {
         album_id: String,
         result: Result<Vec<playterm_subsonic::Song>, String>,
     },
+    /// All tracks across every album for an artist; carries whether playback
+    /// should auto-start (true when the queue was empty at dispatch time).
+    AllTracksForArtist {
+        songs: Vec<playterm_subsonic::Song>,
+        start_playing: bool,
+    },
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
 
 pub struct App {
-    pub active_pane: Pane,
+    pub active_tab: Tab,
+    pub browser_focus: BrowserColumn,
     pub library: LibraryState,
     pub queue: QueueState,
     pub playback: PlaybackState,
@@ -73,7 +102,8 @@ impl App {
         let (library_tx, library_rx) = mpsc::channel(64);
         let (player_tx, player_rx) = spawn_player();
         Ok(Self {
-            active_pane: Pane::Artists,
+            active_tab: Tab::Browser,
+            browser_focus: BrowserColumn::Artists,
             library: LibraryState::default(),
             queue: QueueState::default(),
             playback: PlaybackState::default(),
@@ -112,12 +142,7 @@ impl App {
                 .await
                 .map(|a| a.album)
                 .map_err(|e| e.to_string());
-            let _ = tx
-                .send(LibraryUpdate::Albums {
-                    artist_id,
-                    result,
-                })
-                .await;
+            let _ = tx.send(LibraryUpdate::Albums { artist_id, result }).await;
         });
     }
 
@@ -131,8 +156,33 @@ impl App {
                 .await
                 .map(|a| a.song)
                 .map_err(|e| e.to_string());
+            let _ = tx.send(LibraryUpdate::Tracks { album_id, result }).await;
+        });
+    }
+
+    /// Spawn a task that fetches every album + every track for the given artist,
+    /// then delivers them as a flat sorted `AllTracksForArtist` update.
+    pub fn fetch_all_tracks_for_artist(&self, artist_id: String, start_playing: bool) {
+        let client = self.subsonic.clone();
+        let tx = self.library_tx.clone();
+        tokio::spawn(async move {
+            let artist = match client.get_artist(&artist_id).await {
+                Ok(a) => a,
+                Err(e) => {
+                    eprintln!("fetch_all_tracks_for_artist({}): {e}", artist_id);
+                    return;
+                }
+            };
+            let mut songs = Vec::new();
+            for album in &artist.album {
+                match client.get_album(&album.id).await {
+                    Ok(a) => songs.extend(a.song),
+                    Err(e) => eprintln!("get_album({}): {e}", album.id),
+                }
+            }
+            songs.sort_by_key(|s| (s.disc_number.unwrap_or(1), s.track.unwrap_or(0)));
             let _ = tx
-                .send(LibraryUpdate::Tracks { album_id, result })
+                .send(LibraryUpdate::AllTracksForArtist { songs, start_playing })
                 .await;
         });
     }
@@ -140,13 +190,16 @@ impl App {
     // ── Library update ingestion ──────────────────────────────────────────────
 
     pub fn apply_library_update(&mut self, update: LibraryUpdate) {
-        use crate::state::LoadingState;
         match update {
             LibraryUpdate::Artists(result) => {
                 self.library.artists = match result {
                     Ok(artists) => {
                         if self.library.selected_artist.is_none() && !artists.is_empty() {
                             self.library.selected_artist = Some(0);
+                            // Proactively fetch albums for the first artist.
+                            let first_id = artists[0].id.clone();
+                            self.library.albums.insert(first_id.clone(), LoadingState::Loading);
+                            self.fetch_albums(first_id);
                         }
                         LoadingState::Loaded(artists)
                     }
@@ -157,7 +210,19 @@ impl App {
                 self.library.albums.insert(
                     artist_id,
                     match result {
-                        Ok(albums) => LoadingState::Loaded(albums),
+                        Ok(albums) => {
+                            // Proactively fetch tracks for the first album.
+                            if !albums.is_empty() {
+                                let first_id = albums[0].id.clone();
+                                if !self.library.tracks.contains_key(&first_id) {
+                                    self.library
+                                        .tracks
+                                        .insert(first_id.clone(), LoadingState::Loading);
+                                    self.fetch_tracks(first_id);
+                                }
+                            }
+                            LoadingState::Loaded(albums)
+                        }
                         Err(e) => LoadingState::Error(e),
                     },
                 );
@@ -175,6 +240,16 @@ impl App {
                 );
                 if self.library.selected_track.is_none() {
                     self.library.selected_track = Some(0);
+                }
+            }
+            LibraryUpdate::AllTracksForArtist { songs, start_playing } => {
+                let was_empty = self.queue.songs.is_empty();
+                for song in songs {
+                    self.queue.push(song);
+                }
+                if start_playing && was_empty && !self.queue.songs.is_empty() {
+                    self.queue.cursor = 0;
+                    self.play_current();
                 }
             }
         }
@@ -203,13 +278,12 @@ impl App {
                 }
             }
             PlayerEvent::Error(e) => {
-                // Surface the error in the status bar (future work); for now just print.
                 eprintln!("player error: {e}");
             }
         }
     }
 
-    /// Send a PlayUrl command for whatever song the queue cursor currently points at.
+    /// Send a PlayUrl command for the song the queue cursor points at.
     fn play_current(&mut self) {
         if let Some(song) = self.queue.current().cloned() {
             let url = self.subsonic.stream_url(&song.id, 0);
@@ -224,10 +298,12 @@ impl App {
     pub fn dispatch(&mut self, action: Action) {
         match action {
             Action::Quit => self.should_quit = true,
-            Action::SwitchPane(pane) => self.active_pane = pane,
+            Action::SwitchTab => self.active_tab = self.active_tab.toggle(),
+            Action::FocusLeft => self.handle_focus_left(),
+            Action::FocusRight => self.handle_focus_right(),
             Action::Navigate(dir) => self.handle_navigate(dir),
             Action::Select => self.handle_select(),
-            Action::Back => self.handle_back(),
+            Action::Back => self.handle_focus_left(),
             Action::AddToQueue => self.handle_add_to_queue(),
             Action::AddAllToQueue => self.handle_add_all_to_queue(),
             Action::PlayPause => {
@@ -254,44 +330,119 @@ impl App {
         }
     }
 
+    // ── Focus movement ────────────────────────────────────────────────────────
+
+    fn handle_focus_right(&mut self) {
+        if self.active_tab != Tab::Browser {
+            return;
+        }
+        match self.browser_focus {
+            BrowserColumn::Artists => {
+                if let Some(artist) = self.library.current_artist() {
+                    let artist_id = artist.id.clone();
+                    if !self.library.albums.contains_key(&artist_id) {
+                        self.library.albums.insert(artist_id.clone(), LoadingState::Loading);
+                        self.fetch_albums(artist_id);
+                    }
+                }
+                self.browser_focus = BrowserColumn::Albums;
+            }
+            BrowserColumn::Albums => {
+                if let Some(album) = self.library.current_album() {
+                    let album_id = album.id.clone();
+                    if !self.library.tracks.contains_key(&album_id) {
+                        self.library.tracks.insert(album_id.clone(), LoadingState::Loading);
+                        self.fetch_tracks(album_id);
+                    }
+                }
+                self.browser_focus = BrowserColumn::Tracks;
+            }
+            BrowserColumn::Tracks => {} // already rightmost
+        }
+    }
+
+    fn handle_focus_left(&mut self) {
+        if self.active_tab != Tab::Browser {
+            return;
+        }
+        self.browser_focus = self.browser_focus.left();
+    }
+
+    // ── Navigation ────────────────────────────────────────────────────────────
+
     fn handle_navigate(&mut self, dir: Direction) {
-        use crate::state::LoadingState;
-        match self.active_pane {
-            Pane::Artists => {
-                if let LoadingState::Loaded(artists) = &self.library.artists {
+        match self.active_tab {
+            Tab::Browser => self.handle_navigate_browser(dir),
+            Tab::NowPlaying => self.handle_navigate_queue(dir),
+        }
+    }
+
+    fn handle_navigate_browser(&mut self, dir: Direction) {
+        match self.browser_focus {
+            BrowserColumn::Artists => {
+                // Extract new index and artist_id before any mutable borrows.
+                let result = if let LoadingState::Loaded(artists) = &self.library.artists {
                     let len = artists.len();
                     if len == 0 {
                         return;
                     }
                     let cur = self.library.selected_artist.unwrap_or(0);
-                    self.library.selected_artist = Some(match dir {
+                    let new_idx = match dir {
                         Direction::Up => cur.saturating_sub(1),
                         Direction::Down => (cur + 1).min(len - 1),
                         Direction::Top => 0,
                         Direction::Bottom => len - 1,
-                    });
-                }
-            }
-            Pane::Albums => {
-                let artist_id = match self.library.current_artist() {
-                    Some(a) => a.id.clone(),
-                    None => return,
+                    };
+                    Some((new_idx, artists[new_idx].id.clone()))
+                } else {
+                    None
                 };
-                if let Some(LoadingState::Loaded(albums)) = self.library.albums.get(&artist_id) {
-                    let len = albums.len();
-                    if len == 0 {
-                        return;
+                if let Some((new_idx, artist_id)) = result {
+                    self.library.selected_artist = Some(new_idx);
+                    // Reset downstream selections when artist changes.
+                    self.library.selected_album = Some(0);
+                    self.library.selected_track = Some(0);
+                    // Proactively fetch albums for the newly highlighted artist.
+                    if !self.library.albums.contains_key(&artist_id) {
+                        self.library.albums.insert(artist_id.clone(), LoadingState::Loading);
+                        self.fetch_albums(artist_id);
                     }
-                    let cur = self.library.selected_album.unwrap_or(0);
-                    self.library.selected_album = Some(match dir {
-                        Direction::Up => cur.saturating_sub(1),
-                        Direction::Down => (cur + 1).min(len - 1),
-                        Direction::Top => 0,
-                        Direction::Bottom => len - 1,
-                    });
                 }
             }
-            Pane::Tracks => {
+            BrowserColumn::Albums => {
+                let result = {
+                    let artist_id = match self.library.current_artist() {
+                        Some(a) => a.id.clone(),
+                        None => return,
+                    };
+                    if let Some(LoadingState::Loaded(albums)) = self.library.albums.get(&artist_id) {
+                        let len = albums.len();
+                        if len == 0 {
+                            return;
+                        }
+                        let cur = self.library.selected_album.unwrap_or(0);
+                        let new_idx = match dir {
+                            Direction::Up => cur.saturating_sub(1),
+                            Direction::Down => (cur + 1).min(len - 1),
+                            Direction::Top => 0,
+                            Direction::Bottom => len - 1,
+                        };
+                        Some((new_idx, albums[new_idx].id.clone()))
+                    } else {
+                        None
+                    }
+                };
+                if let Some((new_idx, album_id)) = result {
+                    self.library.selected_album = Some(new_idx);
+                    self.library.selected_track = Some(0);
+                    // Proactively fetch tracks for the newly highlighted album.
+                    if !self.library.tracks.contains_key(&album_id) {
+                        self.library.tracks.insert(album_id.clone(), LoadingState::Loading);
+                        self.fetch_tracks(album_id);
+                    }
+                }
+            }
+            BrowserColumn::Tracks => {
                 let album_id = match self.library.current_album() {
                     Some(a) => a.id.clone(),
                     None => return,
@@ -310,73 +461,38 @@ impl App {
                     });
                 }
             }
-            Pane::Queue => {
-                let len = self.queue.songs.len();
-                if len == 0 {
-                    return;
-                }
-                self.queue.cursor = match dir {
-                    Direction::Up => self.queue.cursor.saturating_sub(1),
-                    Direction::Down => (self.queue.cursor + 1).min(len - 1),
-                    Direction::Top => 0,
-                    Direction::Bottom => len - 1,
-                };
-                // Keep scroll window in sync so the selected row is always visible.
-                self.queue.scroll = self.queue.cursor;
-            }
         }
     }
+
+    fn handle_navigate_queue(&mut self, dir: Direction) {
+        let len = self.queue.songs.len();
+        if len == 0 {
+            return;
+        }
+        self.queue.cursor = match dir {
+            Direction::Up => self.queue.cursor.saturating_sub(1),
+            Direction::Down => (self.queue.cursor + 1).min(len - 1),
+            Direction::Top => 0,
+            Direction::Bottom => len - 1,
+        };
+        self.queue.scroll = self.queue.cursor;
+    }
+
+    // ── Select ────────────────────────────────────────────────────────────────
 
     fn handle_select(&mut self) {
-        use crate::state::LoadingState;
-        match self.active_pane {
-            Pane::Artists => {
-                if let Some(artist) = self.library.current_artist() {
-                    let artist_id = artist.id.clone();
-                    // Only fetch if not already loading/loaded
-                    if !self.library.albums.contains_key(&artist_id) {
-                        self.library
-                            .albums
-                            .insert(artist_id.clone(), LoadingState::Loading);
-                        self.fetch_albums(artist_id);
-                    }
-                    self.library.selected_album = Some(0);
-                    self.active_pane = Pane::Albums;
-                }
-            }
-            Pane::Albums => {
-                if let Some(album) = self.library.current_album() {
-                    let album_id = album.id.clone();
-                    if !self.library.tracks.contains_key(&album_id) {
-                        self.library
-                            .tracks
-                            .insert(album_id.clone(), LoadingState::Loading);
-                        self.fetch_tracks(album_id);
-                    }
-                    self.library.selected_track = Some(0);
-                    self.active_pane = Pane::Tracks;
-                }
-            }
-            Pane::Tracks => {
-                // Enter on a track: add it to the queue and start playing if idle.
-                let was_empty = self.queue.songs.is_empty();
-                self.handle_add_to_queue();
-                if was_empty && !self.queue.songs.is_empty() {
-                    self.queue.cursor = self.queue.songs.len() - 1;
-                    self.play_current();
-                }
-            }
-            Pane::Queue => {}
+        match self.active_tab {
+            Tab::Browser => match self.browser_focus {
+                // Enter on Artists or Albums: same as pressing l
+                BrowserColumn::Artists | BrowserColumn::Albums => self.handle_focus_right(),
+                // Enter on Tracks: add the highlighted track to the queue
+                BrowserColumn::Tracks => self.handle_add_to_queue(),
+            },
+            Tab::NowPlaying => {} // nothing to select in queue view
         }
     }
 
-    fn handle_back(&mut self) {
-        self.active_pane = match self.active_pane {
-            Pane::Albums => Pane::Artists,
-            Pane::Tracks => Pane::Albums,
-            Pane::Queue | Pane::Artists => Pane::Artists,
-        };
-    }
+    // ── Queue helpers ─────────────────────────────────────────────────────────
 
     fn handle_add_to_queue(&mut self) {
         if let Some(song) = self.library.current_track().cloned() {
@@ -390,19 +506,33 @@ impl App {
     }
 
     fn handle_add_all_to_queue(&mut self) {
-        use crate::state::LoadingState;
-        let album_id = match self.library.current_album() {
-            Some(a) => a.id.clone(),
-            None => return,
-        };
-        if let Some(LoadingState::Loaded(songs)) = self.library.tracks.get(&album_id) {
-            let was_empty = self.queue.songs.is_empty();
-            for song in songs.clone() {
-                self.queue.push(song);
+        match self.browser_focus {
+            BrowserColumn::Artists => {
+                // Fetch every album and every track for the selected artist,
+                // then push them all to the queue via AllTracksForArtist.
+                if let Some(artist) = self.library.current_artist() {
+                    let artist_id = artist.id.clone();
+                    let start_playing = self.queue.songs.is_empty();
+                    self.fetch_all_tracks_for_artist(artist_id, start_playing);
+                }
             }
-            if was_empty && !self.queue.songs.is_empty() {
-                self.queue.cursor = 0;
-                self.play_current();
+            BrowserColumn::Albums | BrowserColumn::Tracks => {
+                // Add every track in the selected album to the queue.
+                let album_id = match self.library.current_album() {
+                    Some(a) => a.id.clone(),
+                    None => return,
+                };
+                if let Some(LoadingState::Loaded(songs)) = self.library.tracks.get(&album_id) {
+                    let was_empty = self.queue.songs.is_empty();
+                    for song in songs.clone() {
+                        self.queue.push(song);
+                    }
+                    if was_empty && !self.queue.songs.is_empty() {
+                        self.queue.cursor = 0;
+                        self.play_current();
+                    }
+                }
+                // If tracks not loaded yet: no-op; proactive loading makes this rare.
             }
         }
     }

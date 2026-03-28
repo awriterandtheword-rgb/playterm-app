@@ -1,5 +1,3 @@
-use crate::app::Pane;
-
 #[derive(Debug, Clone)]
 pub enum Direction {
     Up,
@@ -13,7 +11,9 @@ pub enum Action {
     Navigate(Direction),
     Select,
     Back,
-    SwitchPane(Pane),
+    SwitchTab,
+    FocusLeft,
+    FocusRight,
     AddToQueue,
     AddAllToQueue,
     PlayPause,
