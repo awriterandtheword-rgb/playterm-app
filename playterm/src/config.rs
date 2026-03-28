@@ -11,6 +11,51 @@ struct FileConfig {
     server: ServerSection,
     #[serde(default)]
     player: PlayerSection,
+    #[serde(default)]
+    pub keybinds: KeybindsSection,
+    #[serde(default)]
+    pub theme: ThemeSection,
+}
+
+// ── [keybinds] ────────────────────────────────────────────────────────────────
+
+/// Raw keybind strings from config.toml. Every field is `Option<String>`;
+/// unset fields fall back to built-in defaults inside `Keybinds::from_section`.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct KeybindsSection {
+    pub scroll_up:     Option<String>,
+    pub scroll_down:   Option<String>,
+    pub column_left:   Option<String>,
+    pub column_right:  Option<String>,
+    pub play_pause:    Option<String>,
+    pub next_track:    Option<String>,
+    pub prev_track:    Option<String>,
+    pub seek_forward:  Option<String>,
+    pub seek_backward: Option<String>,
+    pub add_track:     Option<String>,
+    pub add_all:       Option<String>,
+    pub shuffle:       Option<String>,
+    pub unshuffle:     Option<String>,
+    pub clear_queue:   Option<String>,
+    pub search:        Option<String>,
+    pub volume_up:     Option<String>,
+    pub volume_down:   Option<String>,
+    pub tab_switch:    Option<String>,
+    pub quit:          Option<String>,
+}
+
+// ── [theme] ───────────────────────────────────────────────────────────────────
+
+/// Raw hex colour strings from config.toml. Defaults inside `Theme::from_section`.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct ThemeSection {
+    pub accent:        Option<String>,
+    pub background:    Option<String>,
+    pub surface:       Option<String>,
+    pub foreground:    Option<String>,
+    pub dimmed:        Option<String>,
+    pub border:        Option<String>,
+    pub border_active: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -43,11 +88,15 @@ fn default_volume() -> u8 { 70 }
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub subsonic_url: String,
-    pub subsonic_user: String,
-    pub subsonic_pass: String,
+    pub subsonic_url:   String,
+    pub subsonic_user:  String,
+    pub subsonic_pass:  String,
     pub default_volume: u8,
-    pub max_bit_rate: u32,
+    pub max_bit_rate:   u32,
+    /// Raw keybind strings — parsed into `Keybinds` by `App::new`.
+    pub keybinds: KeybindsSection,
+    /// Raw theme colour strings — parsed into `Theme` by `App::new`.
+    pub theme:    ThemeSection,
 }
 
 impl Config {
@@ -80,11 +129,13 @@ impl Config {
         }
 
         Ok(Config {
-            subsonic_url: file_cfg.server.url,
-            subsonic_user: file_cfg.server.username,
-            subsonic_pass: file_cfg.server.password,
+            subsonic_url:   file_cfg.server.url,
+            subsonic_user:  file_cfg.server.username,
+            subsonic_pass:  file_cfg.server.password,
             default_volume: file_cfg.player.default_volume,
-            max_bit_rate: file_cfg.player.max_bit_rate,
+            max_bit_rate:   file_cfg.player.max_bit_rate,
+            keybinds:       file_cfg.keybinds,
+            theme:          file_cfg.theme,
         })
     }
 }
@@ -108,15 +159,45 @@ fn create_default(path: &PathBuf) -> Result<()> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating config dir {}", parent.display()))?;
     }
-    let default_toml = r#"[server]
+    let default_toml = r##"[server]
 url = ""
 username = ""
 password = ""
 
 [player]
 default_volume = 70
-max_bit_rate = 0
-"#;
+max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
+
+[keybinds]
+# scroll_up     = "k"
+# scroll_down   = "j"
+# column_left   = "h"
+# column_right  = "l"
+# play_pause    = "p"
+# next_track    = "n"
+# prev_track    = "N"
+# seek_forward  = "Right"
+# seek_backward = "Left"
+# add_track     = "a"
+# add_all       = "Shift+a"
+# shuffle       = "x"
+# unshuffle     = "z"
+# clear_queue   = "D"
+# search        = "/"
+# volume_up     = "+"
+# volume_down   = "-"
+# tab_switch    = "Tab"
+# quit          = "q"
+
+[theme]
+# accent        = "#ff8c00"   # highlighted items, active borders, progress fill
+# background    = "#1a1a1a"   # outer background (status bar, now-playing bar)
+# surface       = "#161616"   # panel backgrounds (browser columns, queue)
+# foreground    = "#d4d0c8"   # primary text
+# dimmed        = "#5a5858"   # muted / secondary text
+# border        = "#252525"   # inactive pane borders
+# border_active = "#3a3a3a"   # active pane borders
+"##;
     std::fs::write(path, default_toml)
         .with_context(|| format!("writing default config to {}", path.display()))?;
     eprintln!("Created default config: {}", path.display());

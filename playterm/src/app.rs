@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::action::{Action, Direction};
 use crate::config::Config;
+use crate::keybinds::Keybinds;
 use crate::state::{LibraryState, LoadingState, PlaybackState, QueueState};
+use crate::theme::Theme;
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
 
@@ -117,6 +119,10 @@ pub struct App {
     /// Cached cover art: `(cover_art_id, raw_image_bytes)`.
     /// Updated whenever a new track starts with a different cover ID.
     pub art_cache: Option<(String, Vec<u8>)>,
+    /// Resolved keybindings (parsed from config.toml [keybinds]).
+    pub keybinds: Keybinds,
+    /// Resolved theme colours (parsed from config.toml [theme]).
+    pub theme: Theme,
 }
 
 impl App {
@@ -127,6 +133,8 @@ impl App {
         let (player_tx, player_rx) = spawn_player();
         // Apply configured default volume immediately.
         let _ = player_tx.send(PlayerCommand::SetVolume(config.default_volume as f32 / 100.0));
+        let keybinds = Keybinds::from_section(&config.keybinds);
+        let theme    = Theme::from_section(&config.theme);
         Ok(Self {
             active_tab: Tab::Browser,
             browser_focus: BrowserColumn::Artists,
@@ -144,6 +152,8 @@ impl App {
             search_filter: None,
             kitty_supported: false,
             art_cache: None,
+            keybinds,
+            theme,
         })
     }
 

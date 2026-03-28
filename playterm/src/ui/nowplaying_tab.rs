@@ -3,8 +3,9 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, BorderType, Borders};
 
+use super::queue;
+
 use crate::app::App;
-use super::{queue, BORDER, SURFACE, TEXT_MUTED};
 
 pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     let cols = Layout::horizontal([
@@ -13,17 +14,18 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     ])
     .split(area);
 
-    render_art_placeholder(frame, cols[0]);
+    render_art_placeholder(app, frame, cols[0]);
     queue::render(app, frame, cols[1], true);
 }
 
-fn render_art_placeholder(frame: &mut Frame, area: Rect) {
+fn render_art_placeholder(app: &App, frame: &mut Frame, area: Rect) {
+    let t = &app.theme;
     let block = Block::default()
         .title(" Album Art ")
-        .title_style(Style::default().fg(TEXT_MUTED).add_modifier(Modifier::BOLD))
+        .title_style(Style::default().fg(t.dimmed).add_modifier(Modifier::BOLD))
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
-        .border_style(Style::default().fg(BORDER))
-        .style(Style::default().bg(SURFACE));
+        .border_style(Style::default().fg(t.border))
+        .style(Style::default().bg(t.surface));
     frame.render_widget(block, area);
 }

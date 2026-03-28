@@ -5,11 +5,11 @@ use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
 
 use crate::app::App;
 use crate::state::LoadingState;
-use super::{ACCENT, BG, BORDER, BORDER_ACTIVE, SURFACE, TEXT, TEXT_MUTED};
 
 pub fn render(app: &App, frame: &mut Frame, area: Rect, is_active: bool) {
-    let border_color = if is_active { BORDER_ACTIVE } else { BORDER };
-    let title_color = if is_active { ACCENT } else { TEXT_MUTED };
+    let t = &app.theme;
+    let border_color = if is_active { t.border_active } else { t.border };
+    let title_color  = if is_active { t.accent }        else { t.dimmed };
 
     let block = Block::default()
         .title(" Artists ")
@@ -17,17 +17,17 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect, is_active: bool) {
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(Style::default().fg(border_color))
-        .style(Style::default().bg(SURFACE));
+        .style(Style::default().bg(t.surface));
 
     match &app.library.artists {
         LoadingState::NotLoaded | LoadingState::Loading => {
-            let item = ListItem::new("Loading…").style(Style::default().fg(TEXT_MUTED));
-            let list = List::new(vec![item]).block(block).style(Style::default().bg(BG));
+            let item = ListItem::new("Loading…").style(Style::default().fg(t.dimmed));
+            let list = List::new(vec![item]).block(block).style(Style::default().bg(t.background));
             frame.render_widget(list, area);
         }
         LoadingState::Error(e) => {
-            let item = ListItem::new(format!("Error: {e}")).style(Style::default().fg(ACCENT));
-            let list = List::new(vec![item]).block(block).style(Style::default().bg(BG));
+            let item = ListItem::new(format!("Error: {e}")).style(Style::default().fg(t.accent));
+            let list = List::new(vec![item]).block(block).style(Style::default().bg(t.background));
             frame.render_widget(list, area);
         }
         LoadingState::Loaded(artists) => {
@@ -42,10 +42,10 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect, is_active: bool) {
             };
 
             let items: Vec<ListItem> = if visible.is_empty() {
-                vec![ListItem::new("No matches").style(Style::default().fg(TEXT_MUTED))]
+                vec![ListItem::new("No matches").style(Style::default().fg(t.dimmed))]
             } else {
                 visible.iter()
-                    .map(|(_, name)| ListItem::new(*name).style(Style::default().fg(TEXT)))
+                    .map(|(_, name)| ListItem::new(*name).style(Style::default().fg(t.foreground)))
                     .collect()
             };
 
@@ -57,12 +57,12 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect, is_active: bool) {
                 .block(block)
                 .highlight_style(
                     Style::default()
-                        .bg(ACCENT)
-                        .fg(BG)
+                        .bg(t.accent)
+                        .fg(t.background)
                         .add_modifier(Modifier::BOLD),
                 )
                 .highlight_symbol("▶ ")
-                .style(Style::default().bg(SURFACE));
+                .style(Style::default().bg(t.surface));
 
             let mut state = ListState::default();
             state.select(sel);

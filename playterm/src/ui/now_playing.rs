@@ -5,7 +5,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::App;
-use super::{ACCENT, SURFACE, TEXT_MUTED};
 
 // ── Top-level: 3-column Spotify-style bar ────────────────────────────────────
 
@@ -24,41 +23,66 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     render_progress(app, frame, cols[2]);
 }
 
-// ── Left 30%: track title (accent/bold) + artist (muted) ─────────────────────
+// ── Left 30%: track title (accent/bold) + artist (muted) + quality tag ───────
 
 fn render_track_info(app: &App, frame: &mut Frame, area: Rect) {
+    let t = &app.theme;
     let lines: Vec<Line> = if let Some(song) = &app.playback.current_song {
         let artist = song.artist.as_deref().unwrap_or("Unknown Artist");
-        vec![
+        // Quality tag: codec name for lossless, bitrate string otherwise.
+        let quality = format_quality(song);
+        let mut rows = vec![
             Line::from(""),
             Line::from(vec![
                 Span::raw("  "),
                 Span::styled(
                     song.title.as_str(),
-                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
                 ),
             ]),
             Line::from(vec![
                 Span::raw("  "),
-                Span::styled(artist, Style::default().fg(TEXT_MUTED)),
+                Span::styled(artist, Style::default().fg(t.dimmed)),
             ]),
-            Line::from(""),
-        ]
+        ];
+        if let Some(q) = quality {
+            rows.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(q, Style::default().fg(t.dimmed)),
+            ]));
+        } else {
+            rows.push(Line::from(""));
+        }
+        rows
     } else {
         vec![
             Line::from(""),
             Line::from(vec![
                 Span::raw("  "),
-                Span::styled("Not playing", Style::default().fg(TEXT_MUTED)),
+                Span::styled("Not playing", Style::default().fg(t.dimmed)),
             ]),
             Line::from(""),
             Line::from(""),
         ]
     };
     frame.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(SURFACE)),
+        Paragraph::new(lines).style(Style::default().bg(t.surface)),
         area,
     );
+}
+
+/// Format the audio quality label for the now-playing bar.
+/// Returns `None` when no quality info is available.
+fn format_quality(song: &playterm_subsonic::Song) -> Option<String> {
+    let lossless = song.suffix.as_deref()
+        .map(|s| matches!(s.to_lowercase().as_str(), "flac" | "wav" | "alac" | "ape" | "aiff"))
+        .unwrap_or(false);
+
+    if lossless {
+        let fmt = song.suffix.as_deref().unwrap_or("").to_uppercase();
+        return Some(fmt);
+    }
+    song.bit_rate.map(|br| format!("{}kbps", br))
 }
 
 // ── Center 40%: transport controls, centered ─────────────────────────────────
@@ -67,15 +91,16 @@ fn render_track_info(app: &App, frame: &mut Frame, area: Rect) {
 //         4-6 spaces between each symbol; play/pause bracketed + accent.
 
 fn render_controls(app: &App, frame: &mut Frame, area: Rect) {
+    let t = &app.theme;
     let (play_label, play_style) = if app.playback.current_song.is_none() {
-        ("▶", Style::default().fg(TEXT_MUTED))
+        ("▶", Style::default().fg(t.dimmed))
     } else if app.playback.paused {
-        ("( ▶ )", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))
+        ("( ▶ )", Style::default().fg(t.accent).add_modifier(Modifier::BOLD))
     } else {
-        ("( ⏸ )", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))
+        ("( ⏸ )", Style::default().fg(t.accent).add_modifier(Modifier::BOLD))
     };
 
-    let sep = Style::default().fg(TEXT_MUTED);
+    let sep = Style::default().fg(t.dimmed);
     let controls = Line::from(vec![
         Span::styled("⇄", sep),
         Span::raw("      "),
@@ -99,7 +124,7 @@ fn render_controls(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(
         Paragraph::new(lines)
             .alignment(Alignment::Center)
-            .style(Style::default().bg(SURFACE)),
+            .style(Style::default().bg(t.surface)),
         area,
     );
 }
@@ -110,12 +135,13 @@ fn render_controls(app: &App, frame: &mut Frame, area: Rect) {
 // sized to fit the column width.  Placed on row 2 of 4.
 
 fn render_progress(app: &App, frame: &mut Frame, area: Rect) {
-    let (elapsed_str, total_str, ratio) = if let Some(_) = &app.playback.current_song {
+    let t = &app.theme;
+    let (elapsed_str, total_str, ratio) = if app.playback.current_song.is_some() {
         let e = app.playback.elapsed.as_secs();
         let elapsed_str = format!("{}:{:02}", e / 60, e % 60);
         let (total_str, ratio) = match app.playback.total {
-            Some(t) => {
-                let ts = t.as_secs();
+            Some(tot) => {
+                let ts = tot.as_secs();
                 let r = if ts > 0 { (e as f64 / ts as f64).clamp(0.0, 1.0) } else { 0.0 };
                 (format!("{}:{:02}", ts / 60, ts % 60), r)
             }
@@ -133,12 +159,12 @@ fn render_progress(app: &App, frame: &mut Frame, area: Rect) {
     let empty = bar_w - filled;
 
     let progress = Line::from(vec![
-        Span::styled(elapsed_str, Style::default().fg(TEXT_MUTED)),
+        Span::styled(elapsed_str, Style::default().fg(t.dimmed)),
         Span::raw("  "),
-        Span::styled("█".repeat(filled), Style::default().fg(ACCENT)),
-        Span::styled("░".repeat(empty), Style::default().fg(TEXT_MUTED)),
+        Span::styled("█".repeat(filled), Style::default().fg(t.accent)),
+        Span::styled("░".repeat(empty), Style::default().fg(t.dimmed)),
         Span::raw("  "),
-        Span::styled(total_str, Style::default().fg(TEXT_MUTED)),
+        Span::styled(total_str, Style::default().fg(t.dimmed)),
     ]);
 
     // Row 0: empty, Row 1: empty, Row 2: progress, Row 3: empty.
@@ -150,7 +176,7 @@ fn render_progress(app: &App, frame: &mut Frame, area: Rect) {
     ];
 
     frame.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(SURFACE)),
+        Paragraph::new(lines).style(Style::default().bg(t.surface)),
         area,
     );
 }

@@ -1,8 +1,10 @@
 mod action;
 mod app;
 mod config;
+mod keybinds;
 mod persist;
 mod state;
+mod theme;
 mod ui;
 
 use std::io;
@@ -25,6 +27,7 @@ use ratatui::Terminal;
 use action::{Action, Direction};
 use app::{App, BrowserColumn, Tab};
 use config::Config;
+use keybinds::Keybinds;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -158,7 +161,7 @@ async fn run_loop(
                         let action = if app.search_mode.active {
                             map_search_key(key.code)
                         } else {
-                            map_key(key.code, key.modifiers, app.active_tab)
+                            map_key(key.code, key.modifiers, app.active_tab, &app.keybinds)
                         };
                         app.dispatch(action);
                     }
@@ -201,42 +204,62 @@ async fn run_loop(
     Ok(())
 }
 
-fn map_key(code: KeyCode, modifiers: KeyModifiers, active_tab: Tab) -> Action {
-    match code {
-        KeyCode::Char('q') => Action::Quit,
-        KeyCode::Tab => Action::SwitchTab,
-        KeyCode::Char('h') => Action::FocusLeft,
-        KeyCode::Char('l') => Action::FocusRight,
-        // Arrow keys: seek in NowPlaying tab, navigate columns in Browser tab.
-        KeyCode::Left => match active_tab {
-            Tab::NowPlaying => Action::SeekBackward,
-            Tab::Browser => Action::FocusLeft,
-        },
-        KeyCode::Right => match active_tab {
+fn map_key(code: KeyCode, modifiers: KeyModifiers, active_tab: Tab, kb: &Keybinds) -> Action {
+    // ── Always-on / non-configurable ─────────────────────────────────────────
+    // g / G: jump to top/bottom — not exposed in config
+    if code == KeyCode::Char('g') && modifiers.is_empty() { return Action::Navigate(Direction::Top);    }
+    if code == KeyCode::Char('G') && modifiers.is_empty() { return Action::Navigate(Direction::Bottom); }
+    // Enter / Esc — not configurable
+    if code == KeyCode::Enter { return Action::Select; }
+    if code == KeyCode::Esc   { return Action::Back;   }
+    // Space is always an alias for play_pause
+    if code == KeyCode::Char(' ') { return Action::PlayPause; }
+    // '=' is always a secondary alias for volume_up (easy to hit with +)
+    if code == KeyCode::Char('=') { return Action::VolumeUp; }
+    // Up/Down arrows are always secondary scroll aliases
+    if code == KeyCode::Up   { return Action::Navigate(Direction::Up);   }
+    if code == KeyCode::Down { return Action::Navigate(Direction::Down); }
+
+    // ── Configurable keybinds ─────────────────────────────────────────────────
+    if kb.quit.matches(code, modifiers)       { return Action::Quit;       }
+    if kb.tab_switch.matches(code, modifiers) { return Action::SwitchTab;  }
+
+    // seek_forward / seek_backward are tab-aware: they also act as column
+    // navigation in the Browser tab so Right/Left keep working there.
+    if kb.seek_forward.matches(code, modifiers) {
+        return match active_tab {
             Tab::NowPlaying => Action::SeekForward,
-            Tab::Browser => Action::FocusRight,
-        },
-        KeyCode::Char('j') | KeyCode::Down => Action::Navigate(Direction::Down),
-        KeyCode::Char('k') | KeyCode::Up => Action::Navigate(Direction::Up),
-        KeyCode::Char('g') => Action::Navigate(Direction::Top),
-        KeyCode::Char('G') => Action::Navigate(Direction::Bottom),
-        KeyCode::Enter => Action::Select,
-        KeyCode::Esc => Action::Back,
-        KeyCode::Char('a') if modifiers.contains(KeyModifiers::SHIFT) => Action::AddAllToQueue,
-        KeyCode::Char('a') => Action::AddToQueue,
-        KeyCode::Char('A') => Action::AddAllToQueue,
-        KeyCode::Char('p') => Action::PlayPause,
-        KeyCode::Char('n') => Action::NextTrack,
-        KeyCode::Char('N') => Action::PrevTrack,
-        KeyCode::Char('+') | KeyCode::Char('=') => Action::VolumeUp,
-        KeyCode::Char('-') => Action::VolumeDown,
-        KeyCode::Char('D') => Action::ClearQueue,
-        KeyCode::Char(' ') => Action::PlayPause,
-        KeyCode::Char('x') => Action::Shuffle,
-        KeyCode::Char('z') => Action::Unshuffle,
-        KeyCode::Char('/') => Action::SearchStart,
-        _ => Action::None,
+            Tab::Browser    => Action::FocusRight,
+        };
     }
+    if kb.seek_backward.matches(code, modifiers) {
+        return match active_tab {
+            Tab::NowPlaying => Action::SeekBackward,
+            Tab::Browser    => Action::FocusLeft,
+        };
+    }
+
+    if kb.column_left.matches(code, modifiers)  { return Action::FocusLeft;  }
+    if kb.column_right.matches(code, modifiers) { return Action::FocusRight; }
+    if kb.scroll_up.matches(code, modifiers)    { return Action::Navigate(Direction::Up);   }
+    if kb.scroll_down.matches(code, modifiers)  { return Action::Navigate(Direction::Down); }
+
+    if kb.play_pause.matches(code, modifiers)   { return Action::PlayPause;    }
+    if kb.next_track.matches(code, modifiers)   { return Action::NextTrack;    }
+    if kb.prev_track.matches(code, modifiers)   { return Action::PrevTrack;    }
+
+    // add_all must be checked before add_track (it's typically a superset key).
+    if kb.add_all.matches(code, modifiers)      { return Action::AddAllToQueue; }
+    if kb.add_track.matches(code, modifiers)    { return Action::AddToQueue;    }
+
+    if kb.shuffle.matches(code, modifiers)      { return Action::Shuffle;      }
+    if kb.unshuffle.matches(code, modifiers)    { return Action::Unshuffle;    }
+    if kb.clear_queue.matches(code, modifiers)  { return Action::ClearQueue;   }
+    if kb.search.matches(code, modifiers)       { return Action::SearchStart;  }
+    if kb.volume_up.matches(code, modifiers)    { return Action::VolumeUp;     }
+    if kb.volume_down.matches(code, modifiers)  { return Action::VolumeDown;   }
+
+    Action::None
 }
 
 fn map_search_key(code: KeyCode) -> Action {

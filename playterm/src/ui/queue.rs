@@ -4,11 +4,11 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
 
 use crate::app::App;
-use super::{ACCENT, BORDER, BORDER_ACTIVE, SURFACE, TEXT, TEXT_MUTED};
 
 pub fn render(app: &App, frame: &mut Frame, area: Rect, is_active: bool) {
-    let border_color = if is_active { BORDER_ACTIVE } else { BORDER };
-    let title_color = if is_active { ACCENT } else { TEXT_MUTED };
+    let t = &app.theme;
+    let border_color = if is_active { t.border_active } else { t.border };
+    let title_color  = if is_active { t.accent }        else { t.dimmed };
 
     let count = app.queue.songs.len();
     let title = if count == 0 {
@@ -23,11 +23,11 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect, is_active: bool) {
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(Style::default().fg(border_color))
-        .style(Style::default().bg(SURFACE));
+        .style(Style::default().bg(t.surface));
 
     if app.queue.songs.is_empty() {
         let item = ListItem::new("Queue is empty — press 'a' to add tracks")
-            .style(Style::default().fg(TEXT_MUTED));
+            .style(Style::default().fg(t.dimmed));
         let list = List::new(vec![item]).block(block);
         frame.render_widget(list, area);
         return;
@@ -53,18 +53,17 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect, is_active: bool) {
         let label = format!("{}  {}  {}  {}", num, title_col, artist_col, dur);
 
         let style = if i == app.queue.cursor {
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(TEXT)
+            Style::default().fg(t.foreground)
         };
         ListItem::new(label).style(style)
     }).collect();
 
     let list = List::new(items)
         .block(block)
-        // highlight_style: accent text on current track row, no bg change
-        .highlight_style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))
-        .style(Style::default().bg(SURFACE));
+        .highlight_style(Style::default().fg(t.accent).add_modifier(Modifier::BOLD))
+        .style(Style::default().bg(t.surface));
 
     let mut state = ListState::default().with_offset(app.queue.scroll);
     state.select(Some(app.queue.cursor));

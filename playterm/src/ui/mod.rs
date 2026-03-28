@@ -12,17 +12,9 @@ pub mod tracks;
 use ratatui::Frame;
 use crate::app::{App, Tab};
 
-// ── Palette ───────────────────────────────────────────────────────────────────
-
-use ratatui::style::Color;
-
-pub const BG: Color = Color::Rgb(26, 26, 26);
-pub const SURFACE: Color = Color::Rgb(22, 22, 22);
-pub const ACCENT: Color = Color::Rgb(255, 140, 0);
-pub const TEXT: Color = Color::Rgb(212, 208, 200);
-pub const TEXT_MUTED: Color = Color::Rgb(90, 88, 88);
-pub const BORDER: Color = Color::Rgb(37, 37, 37);
-pub const BORDER_ACTIVE: Color = Color::Rgb(58, 58, 58);
+// Colour palette constants removed — all colours are now accessed via
+// `app.theme.*` (see `playterm/src/theme.rs`) so that the [theme] config
+// section can override them at runtime.
 
 // ── Top-level render ──────────────────────────────────────────────────────────
 

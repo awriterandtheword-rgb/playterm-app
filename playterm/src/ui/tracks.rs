@@ -5,11 +5,11 @@ use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
 
 use crate::app::App;
 use crate::state::LoadingState;
-use super::{ACCENT, BG, BORDER, BORDER_ACTIVE, SURFACE, TEXT, TEXT_MUTED};
 
 pub fn render(app: &App, frame: &mut Frame, area: Rect, is_active: bool) {
-    let border_color = if is_active { BORDER_ACTIVE } else { BORDER };
-    let title_color = if is_active { ACCENT } else { TEXT_MUTED };
+    let t = &app.theme;
+    let border_color = if is_active { t.border_active } else { t.border };
+    let title_color  = if is_active { t.accent }        else { t.dimmed };
 
     let title = app.library.current_album()
         .map(|a| format!(" {} ", a.name))
@@ -21,13 +21,13 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect, is_active: bool) {
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(Style::default().fg(border_color))
-        .style(Style::default().bg(SURFACE));
+        .style(Style::default().bg(t.surface));
 
     let album_id = match app.library.current_album() {
         Some(a) => a.id.clone(),
         None => {
             let list = List::new(vec![
-                ListItem::new("← Select an album").style(Style::default().fg(TEXT_MUTED)),
+                ListItem::new("← Select an album").style(Style::default().fg(t.dimmed)),
             ])
             .block(block);
             frame.render_widget(list, area);
@@ -37,12 +37,12 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect, is_active: bool) {
 
     match app.library.tracks.get(&album_id) {
         None | Some(LoadingState::NotLoaded) | Some(LoadingState::Loading) => {
-            let item = ListItem::new("Loading…").style(Style::default().fg(TEXT_MUTED));
+            let item = ListItem::new("Loading…").style(Style::default().fg(t.dimmed));
             let list = List::new(vec![item]).block(block);
             frame.render_widget(list, area);
         }
         Some(LoadingState::Error(e)) => {
-            let item = ListItem::new(format!("Error: {e}")).style(Style::default().fg(ACCENT));
+            let item = ListItem::new(format!("Error: {e}")).style(Style::default().fg(t.accent));
             let list = List::new(vec![item]).block(block);
             frame.render_widget(list, area);
         }
@@ -67,10 +67,10 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect, is_active: bool) {
             };
 
             let items: Vec<ListItem> = if visible.is_empty() {
-                vec![ListItem::new("No matches").style(Style::default().fg(TEXT_MUTED))]
+                vec![ListItem::new("No matches").style(Style::default().fg(t.dimmed))]
             } else {
                 visible.iter()
-                    .map(|(_, label)| ListItem::new(label.as_str()).style(Style::default().fg(TEXT)))
+                    .map(|(_, label)| ListItem::new(label.as_str()).style(Style::default().fg(t.foreground)))
                     .collect()
             };
 
@@ -81,12 +81,12 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect, is_active: bool) {
                 .block(block)
                 .highlight_style(
                     Style::default()
-                        .bg(ACCENT)
-                        .fg(BG)
+                        .bg(t.accent)
+                        .fg(t.background)
                         .add_modifier(Modifier::BOLD),
                 )
                 .highlight_symbol("▶ ")
-                .style(Style::default().bg(SURFACE));
+                .style(Style::default().bg(t.surface));
 
             let mut state = ListState::default();
             state.select(sel);
