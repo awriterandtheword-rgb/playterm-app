@@ -102,6 +102,8 @@ fn map_key(code: KeyCode, modifiers: KeyModifiers) -> Action {
         KeyCode::Char('+') | KeyCode::Char('=') => Action::VolumeUp,
         KeyCode::Char('-') => Action::VolumeDown,
         KeyCode::Char('D') => Action::ClearQueue,
+        KeyCode::Char(' ') => Action::PlayPause,
+        KeyCode::Char('x') => Action::Shuffle,
         _ => Action::None,
     }
 }

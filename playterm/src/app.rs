@@ -327,6 +327,7 @@ impl App {
             }
             Action::VolumeUp | Action::VolumeDown => { /* Phase 2 */ }
             Action::ClearQueue => self.handle_clear_queue(),
+            Action::Shuffle => self.handle_shuffle(),
             Action::None => {}
         }
     }
@@ -536,6 +537,42 @@ impl App {
                 // If tracks not loaded yet: no-op; proactive loading makes this rare.
             }
         }
+    }
+
+    fn handle_shuffle(&mut self) {
+        let len = self.queue.songs.len();
+        if len < 2 {
+            return;
+        }
+        // LCG seeded from system time — no external crate needed.
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(12345) as u64;
+        let mut rng = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+
+        let next_lcg = |state: &mut u64| -> usize {
+            *state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (*state >> 33) as usize
+        };
+
+        // If something is playing, pull the current track to index 0 first,
+        // then Fisher-Yates shuffle indices 1..len.
+        if self.playback.current_song.is_some() && self.queue.cursor < len {
+            self.queue.songs.swap(0, self.queue.cursor);
+            for i in (2..len).rev() {
+                let j = next_lcg(&mut rng) % i + 1; // range [1, i]
+                self.queue.songs.swap(i, j);
+            }
+        } else {
+            // Nothing playing — shuffle the whole vec.
+            for i in (1..len).rev() {
+                let j = next_lcg(&mut rng) % (i + 1);
+                self.queue.songs.swap(i, j);
+            }
+        }
+        self.queue.cursor = 0;
+        self.queue.scroll = 0;
     }
 
     fn handle_clear_queue(&mut self) {

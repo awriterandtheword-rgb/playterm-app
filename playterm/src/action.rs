@@ -22,6 +22,7 @@ pub enum Action {
     VolumeUp,
     VolumeDown,
     ClearQueue,
+    Shuffle,
     Quit,
     None,
 }
