@@ -6,13 +6,15 @@ use tokio::sync::mpsc;
 use playterm_player::{PlayerCommand, PlayerEvent, spawn_player};
 use playterm_subsonic::SubsonicClient;
 
+use serde::{Deserialize, Serialize};
+
 use crate::action::{Action, Direction};
 use crate::config::Config;
 use crate::state::{LibraryState, LoadingState, PlaybackState, QueueState};
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Tab {
     Browser,
     NowPlaying,
@@ -29,7 +31,7 @@ impl Tab {
 
 // ── BrowserColumn ─────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BrowserColumn {
     Artists,
     Albums,
@@ -52,6 +54,16 @@ impl BrowserColumn {
             BrowserColumn::Tracks => BrowserColumn::Tracks,
         }
     }
+}
+
+// ── SearchMode ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Default, Clone)]
+pub struct SearchMode {
+    pub active: bool,
+    pub query: String,
+    /// Index within the filtered result list that is currently selected.
+    pub selected: usize,
 }
 
 // ── LibraryUpdate — messages sent back from background fetch tasks ─────────────
@@ -93,6 +105,7 @@ pub struct App {
     /// Receive events from the audio engine thread.
     pub player_rx: std_mpsc::Receiver<PlayerEvent>,
     pub should_quit: bool,
+    pub search_mode: SearchMode,
 }
 
 impl App {
@@ -101,6 +114,8 @@ impl App {
             SubsonicClient::new(&config.subsonic_url, &config.subsonic_user, &config.subsonic_pass)?;
         let (library_tx, library_rx) = mpsc::channel(64);
         let (player_tx, player_rx) = spawn_player();
+        // Apply configured default volume immediately.
+        let _ = player_tx.send(PlayerCommand::SetVolume(config.default_volume as f32 / 100.0));
         Ok(Self {
             active_tab: Tab::Browser,
             browser_focus: BrowserColumn::Artists,
@@ -114,6 +129,7 @@ impl App {
             player_rx,
             config,
             should_quit: false,
+            search_mode: SearchMode::default(),
         })
     }
 
@@ -286,7 +302,7 @@ impl App {
     /// Send a PlayUrl command for the song the queue cursor points at.
     fn play_current(&mut self) {
         if let Some(song) = self.queue.current().cloned() {
-            let url = self.subsonic.stream_url(&song.id, 0);
+            let url = self.subsonic.stream_url(&song.id, self.config.max_bit_rate);
             let duration = song.duration.map(|s| std::time::Duration::from_secs(u64::from(s)));
             self.playback.current_song = Some(song);
             let _ = self.player_tx.send(PlayerCommand::PlayUrl { url, duration });
@@ -325,9 +341,45 @@ impl App {
                     self.play_current();
                 }
             }
-            Action::VolumeUp | Action::VolumeDown => { /* Phase 2 */ }
+            Action::VolumeUp => {
+                self.config.default_volume = self.config.default_volume.saturating_add(5).min(100);
+                let _ = self.player_tx.send(PlayerCommand::SetVolume(self.config.default_volume as f32 / 100.0));
+            }
+            Action::VolumeDown => {
+                self.config.default_volume = self.config.default_volume.saturating_sub(5);
+                let _ = self.player_tx.send(PlayerCommand::SetVolume(self.config.default_volume as f32 / 100.0));
+            }
             Action::ClearQueue => self.handle_clear_queue(),
             Action::Shuffle => self.handle_shuffle(),
+            Action::SearchStart => {
+                self.search_mode.active = true;
+                self.search_mode.query.clear();
+                self.search_mode.selected = 0;
+            }
+            Action::SearchInput(ch) => {
+                if self.search_mode.active {
+                    self.search_mode.query.push(ch);
+                    self.search_mode.selected = 0;
+                }
+            }
+            Action::SearchBackspace => {
+                if self.search_mode.active {
+                    self.search_mode.query.pop();
+                    self.search_mode.selected = 0;
+                }
+            }
+            Action::SearchConfirm => {
+                if self.search_mode.active {
+                    self.handle_search_confirm();
+                    self.search_mode.active = false;
+                    self.search_mode.query.clear();
+                }
+            }
+            Action::SearchCancel => {
+                self.search_mode.active = false;
+                self.search_mode.query.clear();
+                self.search_mode.selected = 0;
+            }
             Action::None => {}
         }
     }
@@ -573,6 +625,53 @@ impl App {
         }
         self.queue.cursor = 0;
         self.queue.scroll = 0;
+    }
+
+    /// Apply the current search: move selection to the first filtered result.
+    fn handle_search_confirm(&mut self) {
+        let q = self.search_mode.query.to_lowercase();
+        if q.is_empty() {
+            return;
+        }
+        match self.active_tab {
+            Tab::Browser => match self.browser_focus {
+                BrowserColumn::Artists => {
+                    if let crate::state::LoadingState::Loaded(artists) = &self.library.artists {
+                        if let Some(idx) = artists.iter().position(|a| a.name.to_lowercase().contains(&q)) {
+                            self.library.selected_artist = Some(idx);
+                        }
+                    }
+                }
+                BrowserColumn::Albums => {
+                    let artist_id = match self.library.current_artist() {
+                        Some(a) => a.id.clone(),
+                        None => return,
+                    };
+                    if let Some(crate::state::LoadingState::Loaded(albums)) = self.library.albums.get(&artist_id) {
+                        if let Some(idx) = albums.iter().position(|a| a.name.to_lowercase().contains(&q)) {
+                            self.library.selected_album = Some(idx);
+                        }
+                    }
+                }
+                BrowserColumn::Tracks => {
+                    let album_id = match self.library.current_album() {
+                        Some(a) => a.id.clone(),
+                        None => return,
+                    };
+                    if let Some(crate::state::LoadingState::Loaded(songs)) = self.library.tracks.get(&album_id) {
+                        if let Some(idx) = songs.iter().position(|s| s.title.to_lowercase().contains(&q)) {
+                            self.library.selected_track = Some(idx);
+                        }
+                    }
+                }
+            },
+            Tab::NowPlaying => {
+                if let Some(idx) = self.queue.songs.iter().position(|s| s.title.to_lowercase().contains(&q)) {
+                    self.queue.cursor = idx;
+                    self.queue.scroll = idx;
+                }
+            }
+        }
     }
 
     fn handle_clear_queue(&mut self) {

@@ -23,6 +23,11 @@ pub enum Action {
     VolumeDown,
     ClearQueue,
     Shuffle,
+    SearchStart,
+    SearchInput(char),
+    SearchBackspace,
+    SearchConfirm,
+    SearchCancel,
     Quit,
     None,
 }

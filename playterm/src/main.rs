@@ -1,10 +1,12 @@
 mod action;
 mod app;
 mod config;
+mod persist;
 mod state;
 mod ui;
 
 use std::io;
+use std::process;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -22,8 +24,16 @@ use config::Config;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let config = Config::from_env();
+    let config = Config::load().unwrap_or_else(|e| {
+        eprintln!("error: {e}");
+        process::exit(1);
+    });
     let mut app = App::new(config)?;
+
+    // Restore previous session state (selections, queue) before first render.
+    if let Err(e) = persist::restore_state(&mut app) {
+        eprintln!("warn: could not restore state: {e}");
+    }
 
     // Begin fetching artists immediately.
     app.fetch_artists();
@@ -64,7 +74,11 @@ async fn run_loop(
         // Poll for a key event (50 ms timeout keeps progress bar responsive).
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                let action = map_key(key.code, key.modifiers);
+                let action = if app.search_mode.active {
+                    map_search_key(key.code)
+                } else {
+                    map_key(key.code, key.modifiers)
+                };
                 app.dispatch(action);
             }
         }
@@ -77,6 +91,10 @@ async fn run_loop(
         if app.should_quit {
             break;
         }
+    }
+    // Persist UI state on clean quit.
+    if let Err(e) = persist::save_state(app) {
+        eprintln!("warn: could not save state: {e}");
     }
     Ok(())
 }
@@ -104,6 +122,17 @@ fn map_key(code: KeyCode, modifiers: KeyModifiers) -> Action {
         KeyCode::Char('D') => Action::ClearQueue,
         KeyCode::Char(' ') => Action::PlayPause,
         KeyCode::Char('x') => Action::Shuffle,
+        KeyCode::Char('/') => Action::SearchStart,
+        _ => Action::None,
+    }
+}
+
+fn map_search_key(code: KeyCode) -> Action {
+    match code {
+        KeyCode::Esc => Action::SearchCancel,
+        KeyCode::Enter => Action::SearchConfirm,
+        KeyCode::Backspace => Action::SearchBackspace,
+        KeyCode::Char(ch) => Action::SearchInput(ch),
         _ => Action::None,
     }
 }

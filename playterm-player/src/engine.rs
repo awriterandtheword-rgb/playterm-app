@@ -13,7 +13,7 @@ use std::time::Duration;
 use anyhow::Result;
 use rodio::{Decoder, DeviceSinkBuilder, Player};
 
-use crate::stream::download_to_tempfile;
+use crate::stream::open_stream;
 
 // ── Public channel types ──────────────────────────────────────────────────────
 
@@ -143,14 +143,10 @@ fn handle_command(
     }
 }
 
-// ── Download + decode ─────────────────────────────────────────────────────────
+// ── Stream + decode ───────────────────────────────────────────────────────────
 
-fn download_and_decode(url: &str) -> Result<Decoder<BufReader<std::fs::File>>> {
-    let path = download_to_tempfile(url)?;
-    let file = std::fs::File::open(&path)?;
-    let decoder = Decoder::try_from(BufReader::new(file))?;
-    // On Linux, removing the file while it's open keeps data alive until
-    // the file handle is dropped — clean up eagerly.
-    let _ = std::fs::remove_file(&path);
+fn download_and_decode(url: &str) -> Result<Decoder<BufReader<crate::stream::StreamingReader>>> {
+    let reader = open_stream(url)?;
+    let decoder = Decoder::try_from(BufReader::new(reader))?;
     Ok(decoder)
 }

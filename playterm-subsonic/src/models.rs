@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use crate::error::SubsonicError;
 
 // ── Public domain types ───────────────────────────────────────────────────────
@@ -42,7 +42,7 @@ pub struct Artists {
 }
 
 /// A single track (song) as returned by `getSong`, `getAlbum`, or `search3`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Song {
     pub id: String,
