@@ -132,4 +132,7 @@ pub struct PlaybackState {
     pub elapsed: Duration,
     pub total: Option<Duration>,
     pub paused: bool,
+    /// True once a `PlayUrl` has been sent to the engine for this track.
+    /// False after restore (current_song is set but engine has nothing loaded).
+    pub player_loaded: bool,
 }

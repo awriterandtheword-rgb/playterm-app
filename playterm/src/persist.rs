@@ -63,7 +63,9 @@ pub fn save_state(app: &App) -> Result<()> {
     Ok(())
 }
 
-/// Restore previously saved state into `app`. No playback is started.
+/// Restore previously saved state into `app`. Populates playback display state
+/// (current_song, total, paused=true) so the now-playing bar renders immediately,
+/// but does NOT send any command to the player engine — the track loads on first play.
 pub fn restore_state(app: &mut App) -> Result<()> {
     let path = state_path()?;
     if !path.exists() {
@@ -82,5 +84,22 @@ pub fn restore_state(app: &mut App) -> Result<()> {
     app.queue.songs = state.queue;
     app.queue.cursor = state.queue_cursor.min(app.queue.songs.len().saturating_sub(1));
     app.queue.scroll = app.queue.cursor;
+
+    // Populate display-only playback state so the now-playing bar shows the
+    // restored track immediately. `player_loaded` stays false — the engine gets
+    // the actual URL only when the user presses play for the first time.
+    if let Some(song) = app.queue.current().cloned() {
+        let duration = song.duration
+            .map(|s| std::time::Duration::from_secs(u64::from(s)));
+        // Prefetch album art so it's ready when the NowPlaying tab is shown.
+        if let Some(cover_id) = &song.cover_art {
+            app.fetch_cover_art(cover_id.clone());
+        }
+        app.playback.current_song = Some(song);
+        app.playback.total = duration;
+        app.playback.paused = true;
+        // player_loaded remains false (default) — engine has no track yet.
+    }
+
     Ok(())
 }

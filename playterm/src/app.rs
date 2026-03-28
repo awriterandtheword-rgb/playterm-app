@@ -440,6 +440,7 @@ impl App {
             let url = self.subsonic.stream_url(&song.id, self.config.max_bit_rate);
             let duration = song.duration.map(|s| std::time::Duration::from_secs(u64::from(s)));
             self.playback.current_song = Some(song);
+            self.playback.player_loaded = true;
             let _ = self.player_tx.send(PlayerCommand::PlayUrl { url, duration });
         }
     }
@@ -461,7 +462,10 @@ impl App {
             Action::AddToQueue => self.handle_add_to_queue(),
             Action::AddAllToQueue => self.handle_add_all_to_queue(),
             Action::PlayPause => {
-                if self.playback.paused {
+                if !self.playback.player_loaded && self.queue.current().is_some() {
+                    // Restored queue: engine has no track yet — load and start playing.
+                    self.play_current();
+                } else if self.playback.paused {
                     self.playback.paused = false;
                     let _ = self.player_tx.send(PlayerCommand::Resume);
                 } else {
@@ -883,6 +887,7 @@ impl App {
         self.playback.current_song = None;
         self.playback.elapsed = std::time::Duration::ZERO;
         self.playback.paused = false;
+        self.playback.player_loaded = false;
     }
 
     fn handle_unshuffle(&mut self) {
