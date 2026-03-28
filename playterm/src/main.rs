@@ -68,9 +68,16 @@ async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
 ) -> Result<()> {
-    // Track which art was last rendered and at what area, to avoid redundant
-    // re-transmissions.
+    // `last_rendered_art` — the (cover_id, rect) of the last full image
+    // transmission.  Kept across tab switches so we can detect whether a
+    // re-transmit is actually needed.
+    //
+    // `art_displayed` — whether the image is currently visible on screen.
+    // Set to false when switching away (ratatui overwrites those cells) but we
+    // deliberately do NOT clear the image from the terminal's store, so we can
+    // redisplay it instantly with `a=p,i=1` when switching back.
     let mut last_rendered_art: Option<(String, Rect)> = None;
+    let mut art_displayed = false;
     let mut last_tab = app.active_tab;
 
     loop {
@@ -91,27 +98,43 @@ async fn run_loop(
                 if let Some((cover_id, bytes)) = &app.art_cache {
                     let sz = terminal.size()?;
                     let art_rect = ui::layout::art_rect(Rect::new(0, 0, sz.width, sz.height));
-                    let needs_render = last_rendered_art
+                    let stored_matches = last_rendered_art
                         .as_ref()
-                        .map(|(id, r)| id != cover_id || r != &art_rect)
-                        .unwrap_or(true);
-                    if needs_render {
+                        .map(|(id, r)| id == cover_id && r == &art_rect)
+                        .unwrap_or(false);
+
+                    if stored_matches && art_displayed {
+                        // Image is already visible — nothing to do.
+                    } else if stored_matches && !art_displayed {
+                        // Same album, same rect — image is in terminal store but
+                        // ratatui overwrote those cells.  Redisplay instantly.
+                        match ui::kitty_art::display_image(art_rect) {
+                            Ok(()) => art_displayed = true,
+                            Err(e) => eprintln!("kitty display: {e}"),
+                        }
+                    } else {
+                        // Album changed, first display, or terminal was resized —
+                        // full re-encode and re-transmit.
                         match ui::kitty_art::render_image(bytes, art_rect) {
-                            Ok(()) => last_rendered_art = Some((cover_id.clone(), art_rect)),
+                            Ok(()) => {
+                                last_rendered_art = Some((cover_id.clone(), art_rect));
+                                art_displayed = true;
+                            }
                             Err(e) => eprintln!("kitty render: {e}"),
                         }
                     }
-                } else if last_rendered_art.is_some() {
-                    // In NowPlaying tab but no art yet — clear any stale image.
+                } else if art_displayed {
+                    // In NowPlaying tab but no art — clear any stale image.
                     let _ = ui::kitty_art::clear_image();
                     last_rendered_art = None;
+                    art_displayed = false;
                 }
             } else if last_tab == app::Tab::NowPlaying {
-                // Just switched away from NowPlaying — clear the image.
-                if last_rendered_art.is_some() {
-                    let _ = ui::kitty_art::clear_image();
-                    last_rendered_art = None;
-                }
+                // Switched away from NowPlaying.  Do NOT call clear_image —
+                // the ratatui redraw already overwrote those cells, and we want
+                // the terminal to keep the image in its store so we can
+                // redisplay it instantly when switching back.
+                art_displayed = false;
             }
         }
         last_tab = app.active_tab;
@@ -132,9 +155,13 @@ async fn run_loop(
                     }
                 }
                 Event::Resize(_, _) => {
-                    // Clear cached render so the art is re-sent at the new dimensions.
-                    if app.kitty_supported && last_rendered_art.is_some() {
+                    // Terminal resized — clear any displayed image and reset
+                    // stored state so the art is re-encoded at the new size.
+                    // last_rendered_art rect will no longer match the new
+                    // art_rect, so the full render path is taken on next frame.
+                    if app.kitty_supported && art_displayed {
                         let _ = ui::kitty_art::clear_image();
+                        art_displayed = false;
                         last_rendered_art = None;
                     }
                 }
