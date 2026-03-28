@@ -76,6 +76,9 @@ pub struct QueueState {
     pub cursor: usize,
     /// Offset for list rendering (scroll).
     pub scroll: usize,
+    /// Snapshot of the queue order taken just before the last shuffle.
+    /// `None` means no unshuffle is available.
+    pub pre_shuffle_order: Option<Vec<Song>>,
 }
 
 impl QueueState {

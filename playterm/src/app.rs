@@ -433,6 +433,30 @@ impl App {
             }
             Action::ClearQueue => self.handle_clear_queue(),
             Action::Shuffle => self.handle_shuffle(),
+            Action::Unshuffle => self.handle_unshuffle(),
+            Action::SeekForward => {
+                let new_pos = if let Some(total) = self.playback.total {
+                    (self.playback.elapsed + std::time::Duration::from_secs(10)).min(total)
+                } else {
+                    self.playback.elapsed + std::time::Duration::from_secs(10)
+                };
+                let _ = self.player_tx.send(PlayerCommand::Seek(new_pos));
+                self.playback.elapsed = new_pos;
+            }
+            Action::SeekBackward => {
+                let new_pos = self.playback.elapsed.saturating_sub(std::time::Duration::from_secs(10));
+                let _ = self.player_tx.send(PlayerCommand::Seek(new_pos));
+                self.playback.elapsed = new_pos;
+            }
+            Action::SeekTo(pos) => {
+                let new_pos = if let Some(total) = self.playback.total {
+                    pos.min(total)
+                } else {
+                    pos
+                };
+                let _ = self.player_tx.send(PlayerCommand::Seek(new_pos));
+                self.playback.elapsed = new_pos;
+            }
             Action::SearchStart => {
                 self.search_mode.active = true;
                 self.search_mode.query.clear();
@@ -712,6 +736,10 @@ impl App {
         if len < 2 {
             return;
         }
+        // Snapshot before shuffling so the user can unshuffle.
+        // Always overwrite — the snapshot is always "order right before the most recent shuffle".
+        self.queue.pre_shuffle_order = Some(self.queue.songs.clone());
+
         // LCG seeded from system time — no external crate needed.
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -794,9 +822,94 @@ impl App {
         self.queue.songs.clear();
         self.queue.cursor = 0;
         self.queue.scroll = 0;
+        self.queue.pre_shuffle_order = None;
         let _ = self.player_tx.send(PlayerCommand::Stop);
         self.playback.current_song = None;
         self.playback.elapsed = std::time::Duration::ZERO;
         self.playback.paused = false;
+    }
+
+    fn handle_unshuffle(&mut self) {
+        let original = match self.queue.pre_shuffle_order.take() {
+            Some(o) => o,
+            None => return,
+        };
+        // Find the currently-playing track in the restored order.
+        let current_id = self.queue.current().map(|s| s.id.clone());
+        self.queue.songs = original;
+        if let Some(id) = current_id {
+            if let Some(idx) = self.queue.songs.iter().position(|s| s.id == id) {
+                self.queue.cursor = idx;
+                self.queue.scroll = idx;
+            }
+        }
+    }
+
+    // ── Mouse-click helpers (called from main.rs event handler) ──────────────
+
+    pub fn click_browser_artist(&mut self, orig_idx: usize) {
+        if let LoadingState::Loaded(artists) = &self.library.artists {
+            if orig_idx >= artists.len() {
+                return;
+            }
+        } else {
+            return;
+        }
+        self.library.selected_artist = Some(orig_idx);
+        self.library.selected_album = Some(0);
+        self.library.selected_track = Some(0);
+        let artist_id = if let LoadingState::Loaded(artists) = &self.library.artists {
+            artists[orig_idx].id.clone()
+        } else {
+            return;
+        };
+        if !self.library.albums.contains_key(&artist_id) {
+            self.library.albums.insert(artist_id.clone(), LoadingState::Loading);
+            self.fetch_albums(artist_id);
+        }
+    }
+
+    pub fn click_browser_album(&mut self, orig_idx: usize) {
+        let artist_id = match self.library.current_artist() {
+            Some(a) => a.id.clone(),
+            None => return,
+        };
+        let album_id = {
+            let albums = match self.library.albums.get(&artist_id) {
+                Some(LoadingState::Loaded(a)) => a,
+                _ => return,
+            };
+            if orig_idx >= albums.len() {
+                return;
+            }
+            albums[orig_idx].id.clone()
+        };
+        self.library.selected_album = Some(orig_idx);
+        self.library.selected_track = Some(0);
+        if !self.library.tracks.contains_key(&album_id) {
+            self.library.tracks.insert(album_id.clone(), LoadingState::Loading);
+            self.fetch_tracks(album_id);
+        }
+    }
+
+    pub fn click_browser_track(&mut self, orig_idx: usize) {
+        let album_id = match self.library.current_album() {
+            Some(a) => a.id.clone(),
+            None => return,
+        };
+        let valid = match self.library.tracks.get(&album_id) {
+            Some(LoadingState::Loaded(songs)) => orig_idx < songs.len(),
+            _ => false,
+        };
+        if valid {
+            self.library.selected_track = Some(orig_idx);
+        }
+    }
+
+    pub fn set_queue_cursor(&mut self, idx: usize) {
+        if idx < self.queue.songs.len() {
+            self.queue.cursor = idx;
+            self.queue.scroll = idx;
+        }
     }
 }

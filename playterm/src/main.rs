@@ -10,7 +10,10 @@ use std::process;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+    MouseButton, MouseEventKind,
+};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
@@ -20,7 +23,7 @@ use ratatui::layout::Rect;
 use ratatui::Terminal;
 
 use action::{Action, Direction};
-use app::App;
+use app::{App, BrowserColumn, Tab};
 use config::Config;
 
 #[tokio::main]
@@ -46,6 +49,7 @@ async fn main() -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
+    stdout.execute(EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -58,6 +62,7 @@ async fn main() -> Result<()> {
 
     // Restore terminal regardless of errors.
     disable_raw_mode()?;
+    terminal.backend_mut().execute(DisableMouseCapture)?;
     terminal.backend_mut().execute(LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
@@ -153,9 +158,16 @@ async fn run_loop(
                         let action = if app.search_mode.active {
                             map_search_key(key.code)
                         } else {
-                            map_key(key.code, key.modifiers)
+                            map_key(key.code, key.modifiers, app.active_tab)
                         };
                         app.dispatch(action);
+                    }
+                }
+                Event::Mouse(mouse) => {
+                    if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                        let sz = terminal.size()?;
+                        let area = ratatui::layout::Rect::new(0, 0, sz.width, sz.height);
+                        handle_mouse_click(mouse.column, mouse.row, app, area);
                     }
                 }
                 Event::Resize(_, _) => {
@@ -189,12 +201,21 @@ async fn run_loop(
     Ok(())
 }
 
-fn map_key(code: KeyCode, modifiers: KeyModifiers) -> Action {
+fn map_key(code: KeyCode, modifiers: KeyModifiers, active_tab: Tab) -> Action {
     match code {
         KeyCode::Char('q') => Action::Quit,
         KeyCode::Tab => Action::SwitchTab,
-        KeyCode::Char('h') | KeyCode::Left => Action::FocusLeft,
-        KeyCode::Char('l') | KeyCode::Right => Action::FocusRight,
+        KeyCode::Char('h') => Action::FocusLeft,
+        KeyCode::Char('l') => Action::FocusRight,
+        // Arrow keys: seek in NowPlaying tab, navigate columns in Browser tab.
+        KeyCode::Left => match active_tab {
+            Tab::NowPlaying => Action::SeekBackward,
+            Tab::Browser => Action::FocusLeft,
+        },
+        KeyCode::Right => match active_tab {
+            Tab::NowPlaying => Action::SeekForward,
+            Tab::Browser => Action::FocusRight,
+        },
         KeyCode::Char('j') | KeyCode::Down => Action::Navigate(Direction::Down),
         KeyCode::Char('k') | KeyCode::Up => Action::Navigate(Direction::Up),
         KeyCode::Char('g') => Action::Navigate(Direction::Top),
@@ -212,6 +233,7 @@ fn map_key(code: KeyCode, modifiers: KeyModifiers) -> Action {
         KeyCode::Char('D') => Action::ClearQueue,
         KeyCode::Char(' ') => Action::PlayPause,
         KeyCode::Char('x') => Action::Shuffle,
+        KeyCode::Char('Z') => Action::Unshuffle,
         KeyCode::Char('/') => Action::SearchStart,
         _ => Action::None,
     }
@@ -224,5 +246,231 @@ fn map_search_key(code: KeyCode) -> Action {
         KeyCode::Backspace => Action::SearchBackspace,
         KeyCode::Char(ch) => Action::SearchInput(ch),
         _ => Action::None,
+    }
+}
+
+// ── Mouse click handler ───────────────────────────────────────────────────────
+
+fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::layout::Rect) {
+    use ratatui::layout::{Constraint, Layout};
+    use state::LoadingState;
+
+    let (center, now_playing) = match app.active_tab {
+        Tab::Browser => {
+            let areas = ui::layout::build_browser(terminal_size);
+            (areas.center, areas.now_playing)
+        }
+        Tab::NowPlaying => {
+            let areas = ui::layout::build_nowplaying(terminal_size);
+            (areas.center, areas.now_playing)
+        }
+    };
+
+    // ── Now-playing bar: [30% info | 40% controls | 30% progress] ────────────
+    let np_cols = Layout::horizontal([
+        Constraint::Percentage(30),
+        Constraint::Percentage(40),
+        Constraint::Percentage(30),
+    ])
+    .split(now_playing);
+
+    let controls_area = np_cols[1];
+    let progress_area = np_cols[2];
+
+    // Controls: row 1 of the now-playing bar (0-indexed).
+    if y == now_playing.y + 1
+        && x >= controls_area.x
+        && x < controls_area.x + controls_area.width
+    {
+        // Divide controls into three equal zones: prev | play-pause | next.
+        let rel_x = x - controls_area.x;
+        let third = controls_area.width / 3;
+        if rel_x < third {
+            app.dispatch(Action::PrevTrack);
+        } else if rel_x < 2 * third {
+            app.dispatch(Action::PlayPause);
+        } else {
+            app.dispatch(Action::NextTrack);
+        }
+        return;
+    }
+
+    // Progress bar: row 2 of the now-playing bar.
+    if y == now_playing.y + 2
+        && x >= progress_area.x
+        && x < progress_area.x + progress_area.width
+        && app.playback.current_song.is_some()
+    {
+        if let Some(total) = app.playback.total {
+            let e = app.playback.elapsed.as_secs();
+            let ts = total.as_secs();
+            let elapsed_str_len = format!("{}:{:02}", e / 60, e % 60).len() as u16;
+            let total_str_len = format!("{}:{:02}", ts / 60, ts % 60).len() as u16;
+            let bar_start = progress_area.x + elapsed_str_len + 2;
+            let bar_end = (progress_area.x + progress_area.width)
+                .saturating_sub(total_str_len + 2);
+
+            if x >= bar_start && bar_end > bar_start {
+                let bar_w = (bar_end - bar_start) as f64;
+                let ratio = (x - bar_start) as f64 / bar_w;
+                let seek_secs = (ratio * ts as f64) as u64;
+                app.dispatch(Action::SeekTo(std::time::Duration::from_secs(seek_secs)));
+            }
+        }
+        return;
+    }
+
+    // ── Center area ───────────────────────────────────────────────────────────
+    if y < center.y || y >= center.y + center.height {
+        return;
+    }
+
+    match app.active_tab {
+        Tab::Browser => {
+            // 3 columns: [30% artists | 35% albums | 35% tracks]
+            let browser_cols = Layout::horizontal([
+                Constraint::Percentage(30),
+                Constraint::Percentage(35),
+                Constraint::Percentage(35),
+            ])
+            .split(center);
+
+            let col_idx = if x < browser_cols[1].x {
+                0usize
+            } else if x < browser_cols[2].x {
+                1
+            } else {
+                2
+            };
+
+            let col_area = browser_cols[col_idx];
+            // Ignore clicks on the border rows.
+            if y <= col_area.y || y >= col_area.y + col_area.height - 1 {
+                return;
+            }
+
+            let visible_row = (y - col_area.y - 1) as usize;
+            let visible_height = col_area.height.saturating_sub(2) as usize;
+
+            // Switch focus to the clicked column.
+            app.browser_focus = match col_idx {
+                0 => BrowserColumn::Artists,
+                1 => BrowserColumn::Albums,
+                _ => BrowserColumn::Tracks,
+            };
+
+            match col_idx {
+                0 => {
+                    // Artists: compute ratatui's auto-scroll offset and map click.
+                    let orig_idx: Option<usize> = {
+                        if let LoadingState::Loaded(artists) = &app.library.artists {
+                            let visible: Vec<usize> = if let Some(q) = &app.search_filter {
+                                artists.iter().enumerate()
+                                    .filter(|(_, a)| a.name.to_lowercase().contains(q.as_str()))
+                                    .map(|(i, _)| i)
+                                    .collect()
+                            } else {
+                                (0..artists.len()).collect()
+                            };
+                            let sel_pos = app.library.selected_artist
+                                .and_then(|s| visible.iter().position(|&i| i == s))
+                                .unwrap_or(0);
+                            // ratatui scrolls to keep selection visible from below:
+                            // scroll = max(0, sel_pos - (visible_height - 1))
+                            let scroll = sel_pos.saturating_sub(visible_height.saturating_sub(1));
+                            let clicked = scroll + visible_row;
+                            visible.get(clicked).copied()
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(idx) = orig_idx {
+                        app.click_browser_artist(idx);
+                    }
+                }
+                1 => {
+                    let orig_idx: Option<usize> = {
+                        let artist_id = match app.library.current_artist() {
+                            Some(a) => a.id.clone(),
+                            None => return,
+                        };
+                        if let Some(LoadingState::Loaded(albums)) =
+                            app.library.albums.get(&artist_id)
+                        {
+                            let visible: Vec<usize> = if let Some(q) = &app.search_filter {
+                                albums.iter().enumerate()
+                                    .filter(|(_, a)| a.name.to_lowercase().contains(q.as_str()))
+                                    .map(|(i, _)| i)
+                                    .collect()
+                            } else {
+                                (0..albums.len()).collect()
+                            };
+                            let sel_pos = app.library.selected_album
+                                .and_then(|s| visible.iter().position(|&i| i == s))
+                                .unwrap_or(0);
+                            let scroll = sel_pos.saturating_sub(visible_height.saturating_sub(1));
+                            let clicked = scroll + visible_row;
+                            visible.get(clicked).copied()
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(idx) = orig_idx {
+                        app.click_browser_album(idx);
+                    }
+                }
+                _ => {
+                    let orig_idx: Option<usize> = {
+                        let album_id = match app.library.current_album() {
+                            Some(a) => a.id.clone(),
+                            None => return,
+                        };
+                        if let Some(LoadingState::Loaded(songs)) =
+                            app.library.tracks.get(&album_id)
+                        {
+                            let visible: Vec<usize> = if let Some(q) = &app.search_filter {
+                                songs.iter().enumerate()
+                                    .filter(|(_, s)| s.title.to_lowercase().contains(q.as_str()))
+                                    .map(|(i, _)| i)
+                                    .collect()
+                            } else {
+                                (0..songs.len()).collect()
+                            };
+                            let sel_pos = app.library.selected_track
+                                .and_then(|s| visible.iter().position(|&i| i == s))
+                                .unwrap_or(0);
+                            let scroll = sel_pos.saturating_sub(visible_height.saturating_sub(1));
+                            let clicked = scroll + visible_row;
+                            visible.get(clicked).copied()
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(idx) = orig_idx {
+                        app.click_browser_track(idx);
+                    }
+                }
+            }
+        }
+        Tab::NowPlaying => {
+            // NowPlaying center: [50% art | 50% queue]
+            let np_center = Layout::horizontal([
+                Constraint::Percentage(50),
+                Constraint::Percentage(50),
+            ])
+            .split(center);
+
+            let queue_area = np_center[1];
+            if x < queue_area.x || x >= queue_area.x + queue_area.width {
+                return;
+            }
+            // Ignore border rows.
+            if y <= queue_area.y || y >= queue_area.y + queue_area.height - 1 {
+                return;
+            }
+            let visible_row = (y - queue_area.y - 1) as usize;
+            let clicked_idx = app.queue.scroll + visible_row;
+            app.set_queue_cursor(clicked_idx);
+        }
     }
 }

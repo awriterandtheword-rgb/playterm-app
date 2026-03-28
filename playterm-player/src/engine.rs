@@ -32,6 +32,8 @@ pub enum PlayerCommand {
     Resume,
     Stop,
     SetVolume(f32),
+    /// Seek to an absolute position in the current track.
+    Seek(Duration),
 }
 
 /// Events sent from the player thread back to the TUI.
@@ -220,6 +222,12 @@ fn handle_command(
             *was_playing = false;
         }
         PlayerCommand::SetVolume(v) => player.set_volume(v),
+        PlayerCommand::Seek(pos) => {
+            let _ = player.try_seek(pos);
+            // Update prev_elapsed so the gapless-transition heuristic isn't
+            // confused by the sudden position jump.
+            *prev_elapsed = pos;
+        }
     }
 }
 
