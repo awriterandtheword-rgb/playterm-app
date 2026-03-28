@@ -106,8 +106,8 @@ async fn run_loop(
                     if stored_matches && art_displayed {
                         // Image is already visible — nothing to do.
                     } else if stored_matches && !art_displayed {
-                        // Same album, same rect — image is in terminal store but
-                        // ratatui overwrote those cells.  Redisplay instantly.
+                        // Same album, same rect — image is in terminal store
+                        // (placement was cleared on tab-away).  Redisplay instantly.
                         match ui::kitty_art::display_image(art_rect) {
                             Ok(()) => art_displayed = true,
                             Err(e) => eprintln!("kitty display: {e}"),
@@ -130,11 +130,15 @@ async fn run_loop(
                     art_displayed = false;
                 }
             } else if last_tab == app::Tab::NowPlaying {
-                // Switched away from NowPlaying.  Do NOT call clear_image —
-                // the ratatui redraw already overwrote those cells, and we want
-                // the terminal to keep the image in its store so we can
-                // redisplay it instantly when switching back.
-                art_displayed = false;
+                // Switched away from NowPlaying — remove the visible Kitty
+                // placement so it doesn't float above the browser columns.
+                // clear_image() uses a=d,d=A which removes the on-screen
+                // placement only; the image data stays in the terminal's store,
+                // so display_image() can redisplay it instantly on tab-back.
+                if art_displayed {
+                    let _ = ui::kitty_art::clear_image();
+                    art_displayed = false;
+                }
             }
         }
         last_tab = app.active_tab;
