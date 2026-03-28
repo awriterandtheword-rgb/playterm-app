@@ -125,6 +125,9 @@ pub struct App {
     pub keybinds: Keybinds,
     /// Resolved theme colours (parsed from config.toml [theme]).
     pub theme: Theme,
+    /// Monotonically increasing counter sent with every `PlayerCommand::PlayUrl`.
+    /// The engine uses it to discard stale downloads from rapid skips.
+    play_gen: u64,
 }
 
 impl App {
@@ -156,6 +159,7 @@ impl App {
             art_cache: None,
             keybinds,
             theme,
+            play_gen: 0,
         })
     }
 
@@ -441,7 +445,8 @@ impl App {
             let duration = song.duration.map(|s| std::time::Duration::from_secs(u64::from(s)));
             self.playback.current_song = Some(song);
             self.playback.player_loaded = true;
-            let _ = self.player_tx.send(PlayerCommand::PlayUrl { url, duration });
+            self.play_gen += 1;
+            let _ = self.player_tx.send(PlayerCommand::PlayUrl { url, duration, gen: self.play_gen });
         }
     }
 
