@@ -123,6 +123,15 @@ async fn run_loop(
         // ── Kitty album art (rendered after ratatui so it sits above text) ──────
         if app.kitty_supported {
             if app.active_tab == app::Tab::NowPlaying {
+                // On every entry to NowPlaying (including initial load) drop any
+                // cached render state so the art is fully re-transmitted this frame.
+                // The fast display_image() path (a=p,i=1) can silently fail if the
+                // terminal evicted the stored image; render_image() is always reliable.
+                if last_tab != app::Tab::NowPlaying {
+                    last_rendered_art = None;
+                    art_displayed = false;
+                }
+
                 if app.help_visible {
                     // Popup is open — clear any displayed art so the Kitty
                     // image doesn't paint over the ratatui popup layer.
@@ -140,16 +149,9 @@ async fn run_loop(
 
                     if stored_matches && art_displayed {
                         // Image is already visible — nothing to do.
-                    } else if stored_matches && !art_displayed {
-                        // Same album, same rect — image is in terminal store
-                        // (placement was cleared on tab-away).  Redisplay instantly.
-                        match ui::kitty_art::display_image(art_rect) {
-                            Ok(()) => art_displayed = true,
-                            Err(e) => eprintln!("kitty display: {e}"),
-                        }
                     } else {
-                        // Album changed, first display, or terminal was resized —
-                        // full re-encode and re-transmit.
+                        // Album changed, first display, tab return, or terminal
+                        // was resized — full re-encode and re-transmit.
                         match ui::kitty_art::render_image(bytes, art_rect) {
                             Ok(()) => {
                                 last_rendered_art = Some((cover_id.clone(), art_rect));
@@ -169,14 +171,6 @@ async fn run_loop(
                 // placement so it doesn't float above the new tab's content.
                 if art_displayed {
                     let _ = ui::kitty_art::clear_image();
-                    art_displayed = false;
-                }
-                // Entering NowPlaying: drop stored render state so the art is
-                // fully re-transmitted on the next frame.  The fast display_image()
-                // path (a=p,i=1) can silently fail if the terminal evicted the
-                // stored image; a full render_image() is always reliable.
-                if app.active_tab == app::Tab::NowPlaying {
-                    last_rendered_art = None;
                     art_displayed = false;
                 }
             }
