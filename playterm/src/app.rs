@@ -268,6 +268,14 @@ pub struct App {
     /// True while an async lyrics fetch is in flight.
     pub lyrics_loading: bool,
 
+    // ── MPRIS / OS media controls (Phase 7.2) ────────────────────────────────
+    /// Handle to the OS media-controls registration. Kept alive for its
+    /// duration; dropped on quit which automatically detaches the D-Bus service.
+    pub media_controls: Option<souvlaki::MediaControls>,
+    /// Receives `Action` values injected by media-key events from the OS.
+    /// Drained at the top of every event-loop iteration.
+    pub media_action_rx: Option<std::sync::mpsc::Receiver<Action>>,
+
     // ── Visualizer (Phase 7) ──────────────────────────────────────────────────
     /// Shared ring buffer of the latest decoded f32 audio samples (max 4096).
     /// Written by the audio thread via SampleTap; read here to drive the FFT.
@@ -314,6 +322,8 @@ impl App {
             SubsonicClient::new(&config.subsonic_url, &config.subsonic_user, &config.subsonic_pass)?;
         let (library_tx, library_rx) = mpsc::channel(64);
         let (player_tx, player_rx, player_join, sample_buffer) = spawn_player();
+        let (media_tx, media_rx) = std::sync::mpsc::channel::<Action>();
+        let media_controls = crate::media_controls::spawn_media_controls(media_tx);
         // Apply configured default volume immediately.
         let _ = player_tx.send(PlayerCommand::SetVolume(config.default_volume as f32 / 100.0));
         let keybinds = Keybinds::from_section(&config.keybinds);
@@ -347,6 +357,8 @@ impl App {
             play_gen: 0,
             cache: track_cache,
             prefetch_gen: Arc::new(AtomicU64::new(0)),
+            media_controls,
+            media_action_rx: Some(media_rx),
             help_visible: false,
             home_art_needs_redraw: false,
             home: HomeState::default(),
@@ -401,6 +413,38 @@ impl App {
             32,
         );
         self.spectrum_bands = new_bands;
+    }
+
+    /// Push current track metadata to the OS media-controls overlay
+    /// (lock screen, notification shade, MPRIS consumers).
+    pub fn update_media_metadata(
+        &mut self,
+        title: &str,
+        artist: &str,
+        album: &str,
+        duration_secs: f64,
+    ) {
+        if let Some(ref mut controls) = self.media_controls {
+            let _ = controls.set_metadata(souvlaki::MediaMetadata {
+                title: Some(title),
+                artist: Some(artist),
+                album: Some(album),
+                duration: Some(std::time::Duration::from_secs_f64(duration_secs)),
+                cover_url: None,
+            });
+        }
+    }
+
+    /// Notify the OS media-controls overlay that playback started or paused.
+    pub fn update_media_playback(&mut self, playing: bool) {
+        if let Some(ref mut controls) = self.media_controls {
+            let status = if playing {
+                souvlaki::MediaPlayback::Playing { progress: None }
+            } else {
+                souvlaki::MediaPlayback::Paused { progress: None }
+            };
+            let _ = controls.set_playback(status);
+        }
     }
 
     /// Returns true while a colour transition is in progress.
@@ -868,7 +912,15 @@ impl App {
                             self.spawn_cache_download(&s_id, &a_id);
                         }
                     }
-                    self.playback.current_song = Some(song);
+                    self.playback.current_song = Some(song.clone());
+                    // Notify OS media controls of the new track.
+                    self.update_media_metadata(
+                        &song.title,
+                        &song.artist.clone().unwrap_or_default(),
+                        &song.album.clone().unwrap_or_default(),
+                        song.duration.map(|d| d as f64).unwrap_or(0.0),
+                    );
+                    self.update_media_playback(true);
                 }
             }
             PlayerEvent::Progress { elapsed, total } => {
@@ -950,7 +1002,15 @@ impl App {
                             song.album.clone().unwrap_or_default(),
                         );
                     }
-                    self.playback.current_song = Some(song);
+                    self.playback.current_song = Some(song.clone());
+                    // Notify OS media controls of the advanced track.
+                    self.update_media_metadata(
+                        &song.title,
+                        &song.artist.clone().unwrap_or_default(),
+                        &song.album.clone().unwrap_or_default(),
+                        song.duration.map(|d| d as f64).unwrap_or(0.0),
+                    );
+                    self.update_media_playback(true);
                 }
             }
             PlayerEvent::TrackEnded => {
@@ -1130,12 +1190,15 @@ impl App {
                 if !self.playback.player_loaded && self.queue.current().is_some() {
                     // Restored queue: engine has no track yet — load and start playing.
                     self.play_current();
+                    // TrackStarted event fires → update_media_playback(true) is called there.
                 } else if self.playback.paused {
                     self.playback.paused = false;
                     let _ = self.player_tx.send(PlayerCommand::Resume);
+                    self.update_media_playback(true);
                 } else {
                     self.playback.paused = true;
                     let _ = self.player_tx.send(PlayerCommand::Pause);
+                    self.update_media_playback(false);
                 }
             }
             Action::NextTrack => {

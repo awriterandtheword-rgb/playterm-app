@@ -6,6 +6,7 @@ mod config;
 mod history;
 mod keybinds;
 mod lyrics;
+mod media_controls;
 mod persist;
 mod state;
 mod theme;
@@ -155,6 +156,14 @@ async fn run_loop(
         // Drain player events from the audio thread.
         while let Ok(event) = app.player_rx.try_recv() {
             app.handle_player_event(event);
+        }
+        // Drain media-key actions from the OS media-controls handler.
+        let media_actions: Vec<action::Action> = app.media_action_rx
+            .as_ref()
+            .map(|rx| std::iter::from_fn(|| rx.try_recv().ok()).collect())
+            .unwrap_or_default();
+        for action in media_actions {
+            app.dispatch(action);
         }
 
         // Advance colour transition before drawing.
