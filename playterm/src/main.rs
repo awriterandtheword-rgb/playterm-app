@@ -225,7 +225,7 @@ fn map_key(code: KeyCode, modifiers: KeyModifiers, active_tab: Tab, kb: &Keybind
     // 't' toggles dynamic accent colour
     if code == KeyCode::Char('t') && modifiers.is_empty() { return Action::ToggleDynamicTheme; }
     // 'L' toggles lyrics overlay (NowPlaying tab only)
-    if code == KeyCode::Char('L') && modifiers.is_empty() { return Action::ToggleLyrics; }
+    if code == KeyCode::Char('L') { return Action::ToggleLyrics; }
     // Up/Down arrows are always secondary scroll aliases
     if code == KeyCode::Up   { return Action::Navigate(Direction::Up);   }
     if code == KeyCode::Down { return Action::Navigate(Direction::Down); }
