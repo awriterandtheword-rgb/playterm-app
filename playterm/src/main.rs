@@ -3,6 +3,7 @@ mod app;
 mod cache;
 mod color;
 mod config;
+mod history;
 mod keybinds;
 mod lyrics;
 mod persist;
@@ -43,9 +44,22 @@ async fn main() -> Result<()> {
     // Detect Kitty graphics support before entering raw mode / alternate screen.
     app.kitty_supported = ui::kitty_art::detect_kitty_support();
 
+    // Query cell pixel dimensions (used for art strip sizing).
+    // Attempted only if Kitty is supported — non-Kitty terminals may not respond.
+    if app.kitty_supported {
+        app.cell_px = ui::kitty_art::query_cell_pixel_size();
+    }
+
     // Restore previous session state (selections, queue) before first render.
     if let Err(e) = persist::restore_state(&mut app) {
         eprintln!("warn: could not restore state: {e}");
+    }
+
+    // Load play history.
+    let history_path = history::history_path();
+    match history::PlayHistory::load(&history_path) {
+        Ok(h) => app.history = h,
+        Err(e) => eprintln!("warn: could not load history: {e}"),
     }
 
     // Begin fetching artists immediately.
@@ -150,9 +164,9 @@ async fn run_loop(
                     last_rendered_art = None;
                     art_displayed = false;
                 }
-            } else if last_tab == app::Tab::NowPlaying {
-                // Switched away from NowPlaying — remove the visible Kitty
-                // placement so it doesn't float above the browser columns.
+            } else if last_tab != app.active_tab {
+                // Switched away from any tab — clear any visible Kitty
+                // placement so it doesn't float above the new tab's content.
                 // clear_image() uses a=d,d=A which removes the on-screen
                 // placement only; the image data stays in the terminal's store,
                 // so display_image() can redisplay it instantly on tab-back.
@@ -160,6 +174,41 @@ async fn run_loop(
                     let _ = ui::kitty_art::clear_image();
                     art_displayed = false;
                 }
+            }
+
+            // ── Home tab art strip redraw after popup close ───────────────────
+            // When the `i` popup was closed on the Home tab, re-render the art
+            // strip (it was cleared on popup-open to avoid overlapping the popup).
+            if app.home_art_needs_redraw
+                && app.active_tab == app::Tab::Home
+                && !app.help_visible
+            {
+                let sz = terminal.size()?;
+                let area = Rect::new(0, 0, sz.width, sz.height);
+                // Replicate the strip area used in home_tab.rs render.
+                let content_area = ui::layout::build_layout(area).center;
+                let half = (content_area.height / 2).max(3);
+                let top_area = Rect { height: half, ..content_area };
+                // albums_inner = top_area inset by 1 on each side (block border).
+                let albums_inner = Rect {
+                    x: top_area.x + 1,
+                    y: top_area.y + 1,
+                    width: top_area.width.saturating_sub(2),
+                    height: top_area.height.saturating_sub(2),
+                };
+                let thumb_area_h = albums_inner.height.saturating_sub(2).max(1);
+                let strip_rect = Rect { height: thumb_area_h, ..albums_inner };
+                ui::kitty_art::render_art_strip(
+                    &app.home.recent_albums,
+                    app.home.album_scroll_offset,
+                    app.home.album_selected_index,
+                    &app.home_art_cache,
+                    strip_rect,
+                    app.cell_px,
+                    albums_inner.x,
+                    albums_inner.y,
+                );
+                app.home_art_needs_redraw = false;
             }
         }
         last_tab = app.active_tab;
@@ -200,6 +249,10 @@ async fn run_loop(
                         art_displayed = false;
                         last_rendered_art = None;
                     }
+                    // Clear art strip thumbnails on resize so they re-render at the new size.
+                    if app.kitty_supported && app.active_tab == app::Tab::Home {
+                        let _ = ui::kitty_art::clear_art_strip();
+                    }
                 }
                 _ => {}
             }
@@ -218,10 +271,158 @@ async fn run_loop(
     if let Err(e) = persist::save_state(app) {
         eprintln!("warn: could not save state: {e}");
     }
+    // Persist play history.
+    let history_path = history::history_path();
+    if let Err(e) = app.history.save(&history_path) {
+        eprintln!("warn: could not save history: {e}");
+    }
     Ok(())
 }
 
+/// Handle mouse clicks within the Home tab center area.
+fn handle_home_click(x: u16, y: u16, app: &mut App, center: ratatui::layout::Rect) {
+    use ratatui::layout::{Constraint, Layout};
+    use crate::ui::kitty_art::art_strip_thumbnail_size;
+
+    if y < center.y || y >= center.y + center.height {
+        return;
+    }
+
+    // Replicate the home_tab layout: top 50% = recently played, bottom 50% = tracks+rediscover.
+    let half = (center.height / 2).max(3);
+    let bottom_h = center.height.saturating_sub(half);
+
+    let top_area = ratatui::layout::Rect {
+        x: center.x,
+        y: center.y,
+        width: center.width,
+        height: half,
+    };
+    let bottom_area = ratatui::layout::Rect {
+        x: center.x,
+        y: center.y + half,
+        width: center.width,
+        height: bottom_h,
+    };
+
+    // ── Top block: Recently Played ────────────────────────────────────────────
+    if y >= top_area.y && y < top_area.y + top_area.height {
+        // Inner area (subtract 1-cell border on all sides).
+        let inner = ratatui::layout::Rect {
+            x: top_area.x + 1,
+            y: top_area.y + 1,
+            width: top_area.width.saturating_sub(2),
+            height: top_area.height.saturating_sub(2),
+        };
+        if y >= inner.y && y < inner.y + inner.height && x >= inner.x && x < inner.x + inner.width {
+            // Focus the RecentAlbums section.
+            app.home.active_section = app::HomeSection::RecentAlbums;
+            app.home.selected_index = 0;
+
+            // Compute which thumbnail was clicked.
+            let thumb_area_h = inner.height.saturating_sub(2).max(1);
+            let (thumb_cols, _) = art_strip_thumbnail_size(app.cell_px, thumb_area_h);
+            let gap = 1u16;
+            let rel_x = x.saturating_sub(inner.x);
+            let slot = (rel_x / (thumb_cols + gap)) as usize;
+            let album_index = app.home.album_scroll_offset + slot;
+            if album_index < app.home.recent_albums.len() {
+                if app.home.album_selected_index == album_index {
+                    // Second click on already-selected album: navigate to Browser.
+                    if app.kitty_supported {
+                        let _ = crate::ui::kitty_art::clear_image();
+                        let _ = crate::ui::kitty_art::clear_art_strip();
+                    }
+                    app.active_tab = app::Tab::Browser;
+                    app.search_filter = None;
+                } else {
+                    // First click: just select.
+                    app.home.album_selected_index = album_index;
+                }
+            }
+        }
+        return;
+    }
+
+    // ── Bottom blocks ─────────────────────────────────────────────────────────
+    if bottom_h == 0 || y < bottom_area.y || y >= bottom_area.y + bottom_area.height {
+        return;
+    }
+
+    let bottom_cols = Layout::horizontal([
+        Constraint::Percentage(50),
+        Constraint::Percentage(50),
+    ])
+    .split(bottom_area);
+
+    let tracks_area    = bottom_cols[0];
+    let rediscover_area = bottom_cols[1];
+
+    // Recent Tracks block.
+    if x >= tracks_area.x && x < tracks_area.x + tracks_area.width {
+        let inner_y = tracks_area.y + 1;
+        let inner_h = tracks_area.height.saturating_sub(2);
+        if y >= inner_y && y < inner_y + inner_h {
+            let row = (y - inner_y) as usize;
+            if row < app.home.recent_tracks.len() {
+                if app.home.active_section == app::HomeSection::RecentTracks
+                    && app.home.selected_index == row
+                {
+                    // Second click on already-selected row: play it.
+                    app.dispatch(Action::Select);
+                } else {
+                    app.home.active_section = app::HomeSection::RecentTracks;
+                    app.home.selected_index = row;
+                }
+            }
+        }
+        return;
+    }
+
+    // Rediscover block.
+    if x >= rediscover_area.x && x < rediscover_area.x + rediscover_area.width {
+        let inner_y = rediscover_area.y + 1;
+        let inner_h = rediscover_area.height.saturating_sub(2);
+        if y >= inner_y && y < inner_y + inner_h {
+            let row = (y - inner_y) as usize;
+            if row < app.home.rediscover.len() {
+                if app.home.active_section == app::HomeSection::Rediscover
+                    && app.home.selected_index == row
+                {
+                    // Second click: navigate to Browser.
+                    app.dispatch(Action::Select);
+                } else {
+                    app.home.active_section = app::HomeSection::Rediscover;
+                    app.home.selected_index = row;
+                }
+            }
+        }
+    }
+}
+
 fn map_key(code: KeyCode, modifiers: KeyModifiers, active_tab: Tab, kb: &Keybinds) -> Action {
+    // ── Home-tab-specific keys ────────────────────────────────────────────────
+    if active_tab == Tab::Home {
+        // J / Shift+j: move to next section.
+        // Handle both KeyCode::Char('J') (most terminals) and
+        // KeyCode::Char('j')+SHIFT (Ghostty / kitty keyboard protocol).
+        let shift = modifiers.intersects(KeyModifiers::SHIFT);
+        if code == KeyCode::Char('J') || (code == KeyCode::Char('j') && shift) {
+            return Action::HomeSectionNext;
+        }
+        // K / Shift+k: move to previous section.
+        if code == KeyCode::Char('K') || (code == KeyCode::Char('k') && shift) {
+            return Action::HomeSectionPrev;
+        }
+        // r: re-roll rediscover / refresh data
+        if code == KeyCode::Char('r') && modifiers.is_empty() { return Action::HomeRefresh; }
+        // h/l: navigate album strip left/right (only active when RecentAlbums section is focused)
+        if code == KeyCode::Char('h') && modifiers.is_empty() { return Action::HomeAlbumLeft; }
+        if code == KeyCode::Char('l') && modifiers.is_empty() { return Action::HomeAlbumRight; }
+        // a: append selected album to queue
+        if code == KeyCode::Char('a') && modifiers.is_empty() { return Action::HomeAlbumAddToQueue; }
+    }
+
     // ── Always-on / non-configurable ─────────────────────────────────────────
     // g / G: jump to top/bottom — not exposed in config
     if code == KeyCode::Char('g') && modifiers.is_empty() { return Action::Navigate(Direction::Top);    }
@@ -244,21 +445,27 @@ fn map_key(code: KeyCode, modifiers: KeyModifiers, active_tab: Tab, kb: &Keybind
     if code == KeyCode::Down { return Action::Navigate(Direction::Down); }
 
     // ── Configurable keybinds ─────────────────────────────────────────────────
-    if kb.quit.matches(code, modifiers)       { return Action::Quit;       }
-    if kb.tab_switch.matches(code, modifiers) { return Action::SwitchTab;  }
+    if kb.quit.matches(code, modifiers)              { return Action::Quit;             }
+    if kb.tab_switch.matches(code, modifiers)        { return Action::SwitchTab;        }
+    if kb.tab_switch_reverse.matches(code, modifiers){ return Action::SwitchTabReverse; }
+    // BackTab (Shift-Tab) is always an alias for reverse tab cycle.
+    if code == KeyCode::BackTab                      { return Action::SwitchTabReverse; }
+    if kb.go_to_home.matches(code, modifiers)        { return Action::GoToHome;         }
+    if kb.go_to_browser.matches(code, modifiers)     { return Action::GoToBrowser;      }
+    if kb.go_to_nowplaying.matches(code, modifiers)  { return Action::GoToNowPlaying;   }
 
     // seek_forward / seek_backward are tab-aware: they also act as column
     // navigation in the Browser tab so Right/Left keep working there.
     if kb.seek_forward.matches(code, modifiers) {
         return match active_tab {
             Tab::NowPlaying => Action::SeekForward,
-            Tab::Browser    => Action::FocusRight,
+            Tab::Browser | Tab::Home => Action::FocusRight,
         };
     }
     if kb.seek_backward.matches(code, modifiers) {
         return match active_tab {
             Tab::NowPlaying => Action::SeekBackward,
-            Tab::Browser    => Action::FocusLeft,
+            Tab::Browser | Tab::Home => Action::FocusLeft,
         };
     }
 
@@ -318,6 +525,10 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
         }
         Tab::NowPlaying => {
             let areas = ui::layout::build_nowplaying(terminal_size);
+            (areas.center, areas.now_playing)
+        }
+        Tab::Home => {
+            let areas = ui::layout::build_layout(terminal_size);
             (areas.center, areas.now_playing)
         }
     };
@@ -382,6 +593,9 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
     }
 
     match app.active_tab {
+        Tab::Home => {
+            handle_home_click(x, y, app, center);
+        }
         Tab::Browser => {
             // 3 columns: [30% artists | 35% albums | 35% tracks]
             let browser_cols = Layout::horizontal([

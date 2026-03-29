@@ -44,8 +44,16 @@ pub struct KeybindsSection {
     pub search:        Option<String>,
     pub volume_up:     Option<String>,
     pub volume_down:   Option<String>,
-    pub tab_switch:    Option<String>,
-    pub quit:          Option<String>,
+    pub tab_switch:         Option<String>,
+    /// Reverse tab cycle (Backtick by default)
+    pub tab_switch_reverse: Option<String>,
+    /// Jump to Home tab (default: '1')
+    pub go_to_home:         Option<String>,
+    /// Jump to Browser tab (default: '2')
+    pub go_to_browser:      Option<String>,
+    /// Jump to NowPlaying tab (default: '3')
+    pub go_to_nowplaying:   Option<String>,
+    pub quit:               Option<String>,
 }
 
 // ── [theme] ───────────────────────────────────────────────────────────────────

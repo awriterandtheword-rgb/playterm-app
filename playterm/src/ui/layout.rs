@@ -12,7 +12,40 @@ pub struct NowPlayingAreas {
     pub status_bar: Rect,
 }
 
+/// Unified areas struct used by `build_layout` (all three tabs).
+pub struct LayoutAreas {
+    pub center:     Rect,
+    pub now_playing: Rect,
+    /// Tab indicator bar — height 1, between now-playing bar and status bar.
+    pub tab_bar:    Rect,
+    pub status_bar: Rect,
+}
+
+/// Unified layout for all tabs:
+///   center (fill) | now-playing bar (4) | tab bar (1) | status bar (1)
+pub fn build_layout(area: Rect) -> LayoutAreas {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(0),    // active tab content
+            Constraint::Length(4), // persistent now-playing bar
+            Constraint::Length(1), // tab indicator bar
+            Constraint::Length(1), // status bar
+        ])
+        .split(area);
+
+    LayoutAreas {
+        center:      chunks[0],
+        now_playing: chunks[1],
+        tab_bar:     chunks[2],
+        status_bar:  chunks[3],
+    }
+}
+
 /// Browser tab: columns (fill) | now-playing bar (4) | status bar (1).
+///
+/// Kept for backwards compatibility with `handle_mouse_click` in `main.rs`
+/// which calls this directly.
 pub fn build_browser(area: Rect) -> BrowserAreas {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -31,6 +64,9 @@ pub fn build_browser(area: Rect) -> BrowserAreas {
 }
 
 /// NowPlaying tab: art + queue (fill) | now-playing bar (4) | status bar (1).
+///
+/// Kept for backwards compatibility with `handle_mouse_click` in `main.rs`
+/// which calls this directly.
 pub fn build_nowplaying(area: Rect) -> NowPlayingAreas {
     let chunks = Layout::default()
         .direction(Direction::Vertical)

@@ -13,7 +13,16 @@ pub enum Action {
     Navigate(Direction),
     Select,
     Back,
+    /// Cycle tabs forward: Home → Browser → NowPlaying → Home (Tab key)
     SwitchTab,
+    /// Cycle tabs backward: Home → NowPlaying → Browser → Home (Backtick / Shift+Tab)
+    SwitchTabReverse,
+    /// Jump directly to Home tab (key '1')
+    GoToHome,
+    /// Jump directly to Browser tab (key '2')
+    GoToBrowser,
+    /// Jump directly to NowPlaying tab (key '3')
+    GoToNowPlaying,
     FocusLeft,
     FocusRight,
     AddToQueue,
@@ -41,6 +50,20 @@ pub enum Action {
     ToggleLyrics,
     /// Toggle the keybind reference popup.
     ToggleHelp,
+    /// Move to the next section on the Home tab (RecentAlbums → RecentTracks → TopArtists → Rediscover).
+    HomeSectionNext,
+    /// Move to the previous section on the Home tab.
+    HomeSectionPrev,
+    /// Refresh Home tab data (re-rolls rediscover suggestions).
+    HomeRefresh,
+    /// Navigate the art strip left (decrement selected album).
+    HomeAlbumLeft,
+    /// Navigate the art strip right (increment selected album).
+    HomeAlbumRight,
+    /// Add the selected album (strip) to queue, replacing existing queue.
+    HomeAlbumPlay,
+    /// Append the selected album (strip) to queue without clearing.
+    HomeAlbumAddToQueue,
     Quit,
     None,
 }
