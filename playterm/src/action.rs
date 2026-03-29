@@ -61,6 +61,7 @@ pub enum Action {
     /// Navigate the art strip right (increment selected album).
     HomeAlbumRight,
     /// Add the selected album (strip) to queue, replacing existing queue.
+    #[allow(dead_code)]
     HomeAlbumPlay,
     /// Append the selected album (strip) to queue without clearing.
     HomeAlbumAddToQueue,

@@ -159,30 +159,6 @@ pub fn render_image(bytes: &[u8], area: Rect) -> Result<()> {
     Ok(())
 }
 
-// ── Redisplay ─────────────────────────────────────────────────────────────────
-
-/// Redisplay the image previously stored under ID 1 without re-transmitting
-/// its pixel data.  The terminal must have received a prior `render_image`
-/// call so that the image is in its store.
-///
-/// Use this after switching back to the NowPlaying tab when the album and
-/// terminal area are unchanged — it is orders of magnitude faster than
-/// re-encoding and re-sending the full image.
-pub fn display_image(area: Rect) -> Result<()> {
-    let inner_x = area.x + 1;
-    let inner_y = area.y + 1;
-    let inner_w = area.width.saturating_sub(2);
-    let inner_h = area.height.saturating_sub(2);
-    if inner_w == 0 || inner_h == 0 {
-        return Ok(());
-    }
-    let mut out = io::stdout().lock();
-    write!(out, "\x1b[{};{}H", inner_y + 1, inner_x + 1)?;
-    write!(out, "\x1b_Ga=p,i=1,c={inner_w},r={inner_h},q=2;\x1b\\")?;
-    out.flush()?;
-    Ok(())
-}
-
 // ── Clearing ──────────────────────────────────────────────────────────────────
 
 /// Delete all Kitty images currently displayed in the terminal.

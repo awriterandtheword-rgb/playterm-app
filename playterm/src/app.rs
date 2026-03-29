@@ -123,6 +123,7 @@ pub enum HomeSection {
     #[default]
     RecentAlbums,
     RecentTracks,
+    #[allow(dead_code)]
     TopArtists,
     Rediscover,
 }
