@@ -8,6 +8,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::app::{HomeSection, HomeState, RecentAlbum};
+use crate::theme::Theme;
 use crate::ui::kitty_art::{art_strip_thumbnail_size, visible_thumbnail_count};
 
 // ── Relative time formatting ──────────────────────────────────────────────────
@@ -29,17 +30,24 @@ fn relative_time(played_at: i64) -> String {
     }
 }
 
-// ── Block with optional accent-coloured title ─────────────────────────────────
+// ── Block with optional accent-coloured title and themed borders ──────────────
 
-fn titled_block<'a>(title: &'a str, is_active: bool, accent: Color) -> Block<'a> {
-    let title_style = if is_active {
-        Style::default().fg(accent).add_modifier(Modifier::BOLD)
+fn titled_block<'a>(title: &'a str, is_active: bool, accent: Color, theme: &Theme) -> Block<'a> {
+    let (title_style, border_style) = if is_active {
+        (
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.border_active).add_modifier(Modifier::BOLD),
+        )
     } else {
-        Style::default()
+        (
+            Style::default().fg(theme.dimmed),
+            Style::default().fg(theme.border),
+        )
     };
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
+        .border_style(border_style)
         .title(Span::styled(title, title_style))
 }
 
@@ -54,6 +62,7 @@ pub fn render_home_tab(
     kitty_supported: bool,
     home_art_cache: &HashMap<String, Vec<u8>>,
     cell_px: Option<(u16, u16)>,
+    theme: &Theme,
 ) {
     if area.height == 0 {
         return;
@@ -76,7 +85,7 @@ pub fn render_home_tab(
 
     // ── Top: Recently Played block ────────────────────────────────────────────
     let is_albums_active = home.active_section == HomeSection::RecentAlbums;
-    let albums_block = titled_block(" Recently Played ", is_albums_active, accent);
+    let albums_block = titled_block(" Recently Played ", is_albums_active, accent, theme);
     let albums_inner = albums_block.inner(top_area);
     f.render_widget(albums_block, top_area);
 
@@ -127,8 +136,8 @@ pub fn render_home_tab(
     let tracks_area   = bottom_cols[0];
     let rediscover_area = bottom_cols[1];
 
-    render_recent_tracks_block(f, tracks_area, home, accent);
-    render_rediscover_block(f, rediscover_area, home, accent);
+    render_recent_tracks_block(f, tracks_area, home, accent, theme);
+    render_rediscover_block(f, rediscover_area, home, accent, theme);
 }
 
 // ── Art strip label rows (Kitty path) ─────────────────────────────────────────
@@ -288,9 +297,9 @@ pub fn render_art_strip_text_fallback(
 
 // ── Section block renderers ───────────────────────────────────────────────────
 
-fn render_recent_tracks_block(f: &mut Frame, area: Rect, home: &HomeState, accent: Color) {
+fn render_recent_tracks_block(f: &mut Frame, area: Rect, home: &HomeState, accent: Color, theme: &Theme) {
     let is_active = home.active_section == HomeSection::RecentTracks;
-    let block = titled_block(" Recent Tracks ", is_active, accent);
+    let block = titled_block(" Recent Tracks ", is_active, accent, theme);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -334,9 +343,9 @@ fn render_recent_tracks_block(f: &mut Frame, area: Rect, home: &HomeState, accen
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-fn render_rediscover_block(f: &mut Frame, area: Rect, home: &HomeState, accent: Color) {
+fn render_rediscover_block(f: &mut Frame, area: Rect, home: &HomeState, accent: Color, theme: &Theme) {
     let is_active = home.active_section == HomeSection::Rediscover;
-    let block = titled_block(" Rediscover ", is_active, accent);
+    let block = titled_block(" Rediscover ", is_active, accent, theme);
     let inner = block.inner(area);
     f.render_widget(block, area);
 

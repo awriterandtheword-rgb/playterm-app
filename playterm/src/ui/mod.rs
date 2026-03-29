@@ -37,6 +37,7 @@ pub fn render(app: &App, frame: &mut Frame) {
                 app.kitty_supported,
                 &app.home_art_cache,
                 app.cell_px,
+                &app.theme,
             );
             now_playing::render(app, frame, areas.now_playing);
             status_bar::render(app, frame, areas.status_bar);

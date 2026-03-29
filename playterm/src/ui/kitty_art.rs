@@ -281,8 +281,12 @@ fn parse_cell_size_response(response: &str) -> Option<(u16, u16)> {
 /// The thumbnail is square (height_px × height_px), scaled to `strip_rows` tall.
 pub fn art_strip_thumbnail_size(cell_px: Option<(u16, u16)>, strip_rows: u16) -> (u16, u16) {
     let (cell_w, cell_h) = cell_px.unwrap_or((8, 16));
+    // Use the larger of cell_w and cell_h so that on terminals where cell
+    // reporting gives a portrait-shaped cell (cell_w < cell_h), we produce a
+    // square thumbnail rather than a squished portrait image.
+    let effective_cell_w = cell_w.max(cell_h);
     let thumb_height_px = strip_rows as u32 * cell_h as u32;
-    let thumb_cols = (thumb_height_px / cell_w as u32) as u16;
+    let thumb_cols = (thumb_height_px / effective_cell_w as u32) as u16;
     let thumb_cols = thumb_cols.max(4).min(16);
     (thumb_cols, strip_rows)
 }

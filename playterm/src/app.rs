@@ -133,13 +133,13 @@ impl HomeSection {
             HomeSection::RecentAlbums => HomeSection::RecentTracks,
             HomeSection::RecentTracks => HomeSection::Rediscover,
             HomeSection::TopArtists  => HomeSection::Rediscover,
-            HomeSection::Rediscover  => HomeSection::Rediscover,
+            HomeSection::Rediscover  => HomeSection::RecentAlbums,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            HomeSection::RecentAlbums => HomeSection::RecentAlbums,
+            HomeSection::RecentAlbums => HomeSection::Rediscover,
             HomeSection::RecentTracks => HomeSection::RecentAlbums,
             HomeSection::TopArtists  => HomeSection::RecentAlbums,
             HomeSection::Rediscover  => HomeSection::RecentTracks,
@@ -264,6 +264,9 @@ pub struct App {
     // ── Home tab state (Phase 6.3) ───────────────────────────────────────────
     /// Cached display data for the Home tab; refreshed on tab entry.
     pub home: HomeState,
+    /// When `Some(name)`, the Browser tab will pre-select the artist with this
+    /// name on the next render pass, then clear the field.
+    pub pending_artist_select: Option<String>,
 
     // ── Play history (Phase 6.1) ──────────────────────────────────────────────
     /// Persistent play history (loaded on startup, saved on quit).
@@ -327,6 +330,7 @@ impl App {
             prefetch_gen: Arc::new(AtomicU64::new(0)),
             help_visible: false,
             home: HomeState::default(),
+            pending_artist_select: None,
             history: crate::history::PlayHistory::default(),
             play_recorded: false,
             lyrics_visible,
@@ -1017,6 +1021,7 @@ impl App {
                 }
                 self.active_tab = Tab::Browser;
                 self.search_filter = None;
+                self.apply_pending_artist_select();
             }
             Action::GoToNowPlaying => {
                 if self.kitty_supported {
@@ -1264,6 +1269,31 @@ impl App {
         }
     }
 
+    // ── Pending artist pre-selection ──────────────────────────────────────────
+
+    /// If `pending_artist_select` is set, find the artist by name in the loaded
+    /// artist list, select it, and clear the pending value.
+    /// Called whenever the Browser tab becomes active.
+    pub fn apply_pending_artist_select(&mut self) {
+        if let Some(name) = self.pending_artist_select.take() {
+            if let LoadingState::Loaded(artists) = &self.library.artists {
+                if let Some(idx) = artists.iter().position(|a| a.name == name) {
+                    let artist_id = artists[idx].id.clone();
+                    self.library.selected_artist = Some(idx);
+                    self.library.selected_album = Some(0);
+                    self.library.selected_track = Some(0);
+                    self.browser_focus = BrowserColumn::Artists;
+                    if !self.library.albums.contains_key(&artist_id) {
+                        self.library.albums.insert(artist_id.clone(), LoadingState::Loading);
+                        self.fetch_albums(artist_id);
+                    }
+                }
+                // If artist not found, pending was taken (cleared) — switch Browser normally.
+            }
+            // If artists not yet loaded, pending was taken — no-op.
+        }
+    }
+
     // ── Focus movement ────────────────────────────────────────────────────────
 
     fn handle_focus_right(&mut self) {
@@ -1472,12 +1502,18 @@ impl App {
     fn handle_select_home(&mut self) {
         match self.home.active_section {
             HomeSection::RecentAlbums => {
-                // Enter on album strip: fetch and replace queue with all tracks, then play.
+                // Enter on album strip: navigate to Browser with the album's artist pre-selected.
                 let idx = self.home.album_selected_index;
                 if let Some(album) = self.home.recent_albums.get(idx) {
-                    let album_id = album.album_id.clone();
-                    let start_playing = true;
-                    self.fetch_and_replace_queue_with_album(album_id, start_playing);
+                    let artist_name = album.artist_name.clone();
+                    if self.kitty_supported {
+                        let _ = crate::ui::kitty_art::clear_image();
+                        let _ = crate::ui::kitty_art::clear_art_strip();
+                    }
+                    self.pending_artist_select = Some(artist_name);
+                    self.active_tab = Tab::Browser;
+                    self.search_filter = None;
+                    self.apply_pending_artist_select();
                 }
             }
             HomeSection::RecentTracks => {

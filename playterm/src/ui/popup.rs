@@ -14,11 +14,20 @@ const KEY_COL_W: usize = 12;
 fn sections() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
     vec![
         ("Navigation", vec![
-            ("j / k",   "Scroll up / down"),
-            ("h / l",   "Previous / next column (Browser)"),
-            ("Tab",     "Switch tab"),
-            ("/",       "Search current column"),
-            ("Enter",   "Select / expand"),
+            ("j / k",       "Scroll up / down"),
+            ("h / l",       "Previous / next column (Browser)"),
+            ("1 / 2 / 3",   "Go to Home / Browse / Now Playing"),
+            ("Tab",         "Next tab"),
+            ("Shift-Tab",   "Previous tab"),
+            ("/",           "Search current column"),
+            ("Enter",       "Select / expand"),
+        ]),
+        ("Home Tab", vec![
+            ("h / l",   "Select album"),
+            ("j / k",   "Navigate list"),
+            ("J / K",   "Switch section"),
+            ("r",       "Re-roll rediscover"),
+            ("Enter",   "Go to artist in Browse"),
         ]),
         ("Playback", vec![
             ("p / Space", "Play / pause"),

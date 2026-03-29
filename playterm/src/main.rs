@@ -406,6 +406,8 @@ fn map_key(code: KeyCode, modifiers: KeyModifiers, active_tab: Tab, kb: &Keybind
     if kb.quit.matches(code, modifiers)              { return Action::Quit;             }
     if kb.tab_switch.matches(code, modifiers)        { return Action::SwitchTab;        }
     if kb.tab_switch_reverse.matches(code, modifiers){ return Action::SwitchTabReverse; }
+    // BackTab (Shift-Tab) is always an alias for reverse tab cycle.
+    if code == KeyCode::BackTab                      { return Action::SwitchTabReverse; }
     if kb.go_to_home.matches(code, modifiers)        { return Action::GoToHome;         }
     if kb.go_to_browser.matches(code, modifiers)     { return Action::GoToBrowser;      }
     if kb.go_to_nowplaying.matches(code, modifiers)  { return Action::GoToNowPlaying;   }
