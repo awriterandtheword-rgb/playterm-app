@@ -4,14 +4,29 @@ use rustfft::{FftPlanner, num_complex::Complex};
 
 const FFT_SIZE: usize = 2048;
 
+/// Fraction of positive-frequency bins to use (top 60% discarded).
+/// Music content above ~8 kHz contributes little visually and the sparse
+/// high-frequency bins produce single-bin spikes that look like noise.
+const BIN_USE_FRACTION: f32 = 0.40;
+
+/// Minimum number of FFT bins a band must span before it gets its own value.
+/// Bands narrower than this inherit the previous band's value, preventing
+/// isolated single-bin spikes in the treble region.
+const MIN_BINS_PER_BAND: usize = 3;
+
 /// Compute `num_bands` frequency bands from the latest samples in the ring buffer.
 ///
 /// - Applies a Hann window to the most recent FFT_SIZE samples.
+/// - Uses only the lowest `BIN_USE_FRACTION` of positive-frequency bins so
+///   sparse high-frequency bins cannot spike independently.
 /// - Uses logarithmic bin grouping so bass bands are wider than treble bands.
-/// - Converts magnitudes to dB, normalises to 0.0–1.0, then applies temporal smoothing.
+/// - Bands covering fewer than `MIN_BINS_PER_BAND` FFT bins inherit the
+///   previous band's value instead of computing their own.
+/// - Converts magnitudes to dB, normalises to 0.0–1.0, then applies temporal
+///   smoothing.
 ///
-/// Returns a `Vec<f32>` of length `num_bands`.  If the buffer has fewer than 16
-/// samples the function returns all-zeros (silence / startup).
+/// Returns a `Vec<f32>` of length `num_bands`.  If the buffer has fewer than
+/// 16 samples the function returns all-zeros (silence / startup).
 pub fn compute_bands(
     samples: &VecDeque<f32>,
     planner: &mut FftPlanner<f32>,
@@ -37,8 +52,9 @@ pub fn compute_bands(
         .map(|i| {
             if i < available {
                 let s = samples[start + i];
-                let window = 0.5 * (1.0
-                    - (2.0 * std::f32::consts::PI * i as f32 / (n - 1) as f32).cos());
+                let window = 0.5
+                    * (1.0
+                        - (2.0 * std::f32::consts::PI * i as f32 / (n - 1) as f32).cos());
                 Complex { re: s * window, im: 0.0 }
             } else {
                 Complex { re: 0.0, im: 0.0 }
@@ -56,32 +72,57 @@ pub fn compute_bands(
         .map(|c| (c.re * c.re + c.im * c.im).sqrt())
         .collect();
 
-    let num_mag = magnitudes.len(); // = half - 1 = 1023
+    // num_mag = half - 1 = 1023 for FFT_SIZE 2048.
+    let num_mag = magnitudes.len();
 
-    // Logarithmic band grouping: maps from bin 1..num_mag to num_bands bands.
+    // Cap to the lowest BIN_USE_FRACTION of bins.  The top 60% of the
+    // spectrum contains sparse, noise-prone bins that spike visually.
+    let num_mag_used = ((num_mag as f32 * BIN_USE_FRACTION) as usize).max(1);
+
+    // Logarithmic band grouping spanning bin 1..=num_mag_used.
     let log_min = 1.0f32.ln();
-    let log_max = (num_mag as f32).ln();
+    let log_max = (num_mag_used as f32).ln();
 
-    let raw_bands: Vec<f32> = (0..num_bands)
+    // ── Compute bin ranges ────────────────────────────────────────────────────
+    // Build (bin_start, bin_end) for each band before averaging, so we can
+    // inspect the width and decide whether to merge.
+    let band_ranges: Vec<(usize, usize)> = (0..num_bands)
         .map(|b| {
             let t0 = b as f32 / num_bands as f32;
             let t1 = (b + 1) as f32 / num_bands as f32;
-            let bin_start =
-                ((log_min + t0 * (log_max - log_min)).exp() as usize).min(num_mag - 1);
+            let bin_start = ((log_min + t0 * (log_max - log_min)).exp() as usize)
+                .min(num_mag_used - 1);
             let bin_end = ((log_min + t1 * (log_max - log_min)).exp() as usize)
                 .max(bin_start + 1)
-                .min(num_mag);
-
-            let count = (bin_end - bin_start) as f32;
-            let sum: f32 = magnitudes[bin_start..bin_end].iter().sum();
-            sum / count
+                .min(num_mag_used);
+            (bin_start, bin_end)
         })
         .collect();
 
-    // Normalisation factor: scale magnitude so a full-scale sine gives ~0 dB.
+    // ── Average magnitudes; merge narrow bands ────────────────────────────────
+    // A band covering fewer than MIN_BINS_PER_BAND FFT bins is too sparse to
+    // be meaningful — it inherits the previous band's averaged magnitude instead
+    // of computing its own, suppressing isolated high-frequency spikes.
+    let mut raw_bands: Vec<f32> = Vec::with_capacity(num_bands);
+    let mut prev_val = 0.0f32;
+
+    for (bin_start, bin_end) in &band_ranges {
+        let width = bin_end - bin_start;
+        let val = if width < MIN_BINS_PER_BAND {
+            prev_val
+        } else {
+            let sum: f32 = magnitudes[*bin_start..*bin_end].iter().sum();
+            let avg = sum / width as f32;
+            prev_val = avg;
+            avg
+        };
+        raw_bands.push(val);
+    }
+
+    // ── dB normalisation + temporal smoothing ────────────────────────────────
+    // Scale factor: 2/N normalises so a full-scale sine gives ~0 dB.
     let scale = 2.0 / n as f32;
 
-    // Convert to dB, normalise to 0.0–1.0, smooth.
     raw_bands
         .iter()
         .zip(prev_bands.iter().chain(std::iter::repeat(&0.0f32)))
