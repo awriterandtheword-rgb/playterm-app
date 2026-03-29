@@ -359,7 +359,8 @@ fn handle_command(
         }
         PlayerCommand::SetVolume(v) => player.set_volume(v),
         PlayerCommand::Seek(pos) => {
-            let _ = player.try_seek(pos);
+            let result = player.try_seek(pos);
+            eprintln!("[seek] target={:?} result={:?}", pos, result);
             // Update prev_elapsed so the gapless-transition heuristic isn't
             // confused by the sudden position jump.
             *prev_elapsed = pos;
