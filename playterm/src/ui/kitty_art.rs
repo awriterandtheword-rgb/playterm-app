@@ -283,8 +283,8 @@ fn parse_cell_size_response(response: &str) -> Option<(u16, u16)> {
 /// unreliable values on Ghostty macOS.  A fixed 32 px/cell assumption
 /// is used instead when computing pixel dimensions in `render_art_strip`.
 pub fn art_strip_thumbnail_size(_cell_px: Option<(u16, u16)>, strip_rows: u16) -> (u16, u16) {
-    // Square: same number of columns as rows.
-    (strip_rows, strip_rows)
+    // Cells are ~2:1 tall-to-wide, so double the column count to produce square thumbnails.
+    (strip_rows * 2, strip_rows)
 }
 
 /// How many thumbnails fit horizontally in `terminal_cols` columns.
