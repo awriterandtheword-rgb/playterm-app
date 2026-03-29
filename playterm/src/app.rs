@@ -1612,12 +1612,16 @@ impl App {
                 self.search_filter = None;
             }
             HomeSection::Rediscover => {
-                // Switch to Browser tab.
+                // Pre-select the chosen artist in the Browser, then switch.
+                if let Some((_, artist_name)) = self.home.rediscover.get(self.home.selected_index) {
+                    self.pending_artist_select = Some(artist_name.clone());
+                }
                 if self.kitty_supported {
                     let _ = crate::ui::kitty_art::clear_image();
                     let _ = crate::ui::kitty_art::clear_art_strip();
                 }
                 self.active_tab = Tab::Browser;
+                self.apply_pending_artist_select();
                 self.search_filter = None;
             }
         }
