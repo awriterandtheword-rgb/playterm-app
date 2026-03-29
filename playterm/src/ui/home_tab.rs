@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -61,7 +60,6 @@ pub fn render_home_tab(
     accent: Color,
     kitty_supported: bool,
     help_visible: bool,
-    home_art_cache: &HashMap<String, Vec<u8>>,
     cell_px: Option<(u16, u16)>,
     theme: &Theme,
 ) {
@@ -91,26 +89,15 @@ pub fn render_home_tab(
     f.render_widget(albums_block, top_area);
 
     if kitty_supported && !help_visible {
-        // Render art strip inside the inner area.
-        // Suppressed while the help popup is open to prevent Kitty images
-        // from painting over the ratatui popup layer.
-        // thumb height = inner_area height minus 2 rows (album name + artist name).
-        let thumb_area_h = albums_inner.height.saturating_sub(2).max(1);
-        crate::ui::kitty_art::render_art_strip(
-            &home.recent_albums,
-            home.album_scroll_offset,
-            home.album_selected_index,
-            home_art_cache,
-            // Pass a rect of thumb_area_h height so the sizing helper uses it correctly.
-            Rect {
-                height: thumb_area_h,
-                ..albums_inner
-            },
-            cell_px,
-            albums_inner.x,
-            albums_inner.y,
-        );
-        // Render album/artist name rows below the thumbnails.
+        // NOTE: render_art_strip (heavy: decode + Lanczos3 resize + zlib + base64 + Kitty
+        // protocol write) is intentionally NOT called here on every frame.  Instead it is
+        // driven from main.rs only when `app.home_art_needs_redraw` is set, which happens:
+        //   • on tab entry (GoToHome / SwitchTab landing)
+        //   • when a HomeArt cache update arrives
+        //   • when the album scroll/selection changes
+        // This keeps the per-frame render budget well under 1 ms.
+
+        // Render album/artist name rows below where the thumbnails are placed.
         render_art_strip_labels(f, albums_inner, home, accent, cell_px, is_albums_active);
     } else {
         render_art_strip_text_fallback(

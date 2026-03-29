@@ -513,25 +513,64 @@ fn map_help_key(code: KeyCode, modifiers: KeyModifiers, kb: &Keybinds) -> Action
 }
 
 // ── Mouse click handler ───────────────────────────────────────────────────────
+//
+// CALL PATH DIAGNOSIS (tab-bar freeze, 2026-03-28)
+// ─────────────────────────────────────────────────
+// Render uses build_layout() for ALL three tabs (center | now_playing | tab_bar | status_bar).
+// Previously this function used build_browser() / build_nowplaying() for the Browser /
+// NowPlaying tabs — those layouts omit the tab_bar row, so their `now_playing` started 1
+// row lower and their `center` was 1 row taller than what was actually drawn on screen.
+//
+// Consequence 1 — no tab-bar click handler existed at all.
+// Consequence 2 — the coordinate mismatch meant clicks on the rendered now-playing bar
+//   rows 0 and 1 could silently fall through rather than hitting the controls check.
+//
+// The freeze itself came from render_art_strip() being called on *every* ratatui frame
+// inside render_home_tab().  That function does, per visible thumbnail:
+//   image::load_from_memory → resize_exact(Lanczos3) → zlib compress → base64 encode
+//   → Kitty protocol write to stdout
+// For 16 albums this is multiple seconds of CPU-bound work every ~50 ms poll tick.
+//
+// Fixes applied:
+//   1. Use build_layout() for all tabs here so geometry matches the renderer.
+//   2. Add a tab_bar hit-test that dispatches GoToHome / GoToBrowser / GoToNowPlaying.
+//      The dispatch completes in <1 ms (refresh_home_data() is in-memory + tokio::spawn).
+//   3. render_art_strip() removed from render_home_tab() (per-frame path).
+//      It is now driven exclusively by the home_art_needs_redraw flag in main.rs,
+//      set only when: entering Home tab, a HomeArt cache update arrives, or
+//      the album scroll / selection changes.
 
 fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::layout::Rect) {
     use ratatui::layout::{Constraint, Layout};
     use state::LoadingState;
 
-    let (center, now_playing) = match app.active_tab {
-        Tab::Browser => {
-            let areas = ui::layout::build_browser(terminal_size);
-            (areas.center, areas.now_playing)
-        }
-        Tab::NowPlaying => {
-            let areas = ui::layout::build_nowplaying(terminal_size);
-            (areas.center, areas.now_playing)
-        }
-        Tab::Home => {
-            let areas = ui::layout::build_layout(terminal_size);
-            (areas.center, areas.now_playing)
-        }
-    };
+    // Always use build_layout: the renderer uses it for all three tabs.
+    let areas = ui::layout::build_layout(terminal_size);
+    let center = areas.center;
+    let now_playing = areas.now_playing;
+
+    // ── Tab bar: dispatch GoToHome / GoToBrowser / GoToNowPlaying ────────────
+    if y == areas.tab_bar.y {
+        // The labels are:  " Home "  " │ "  " Browse "  " │ "  " Now Playing "
+        // Measure cumulative widths to decide which label was clicked.
+        // Label widths (chars): Home=6, sep=3, Browse=8, sep=3, NowPlaying=13
+        let home_end:      u16 = 6;
+        let browser_start: u16 = 9;   // 6+3
+        let browser_end:   u16 = 17;  // 9+8
+        let np_start:      u16 = 20;  // 17+3
+
+        let action = if x < home_end {
+            Action::GoToHome
+        } else if x >= browser_start && x < browser_end {
+            Action::GoToBrowser
+        } else if x >= np_start {
+            Action::GoToNowPlaying
+        } else {
+            Action::None // clicked a separator
+        };
+        app.dispatch(action);
+        return;
+    }
 
     // ── Now-playing bar: [30% info | 40% controls | 30% progress] ────────────
     let np_cols = Layout::horizontal([

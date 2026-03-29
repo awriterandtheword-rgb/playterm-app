@@ -36,7 +36,6 @@ pub fn render(app: &App, frame: &mut Frame) {
                 app.accent(),
                 app.kitty_supported,
                 app.help_visible,
-                &app.home_art_cache,
                 app.cell_px,
                 &app.theme,
             );

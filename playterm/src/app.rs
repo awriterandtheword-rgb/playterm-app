@@ -754,6 +754,11 @@ impl App {
                 self.home_art_cache.insert(album_id, bytes);
                 // A fetch slot opened up — check if more albums need fetching.
                 self.spawn_pending_home_art_fetches();
+                // Signal main loop to re-render the art strip now that a new
+                // thumbnail is available in the cache.
+                if self.active_tab == Tab::Home {
+                    self.home_art_needs_redraw = true;
+                }
             }
         }
     }
@@ -1011,7 +1016,10 @@ impl App {
                 }
                 self.active_tab = self.active_tab.next();
                 self.search_filter = None;
-                if self.active_tab == Tab::Home { self.refresh_home_data(); }
+                if self.active_tab == Tab::Home {
+                    self.refresh_home_data();
+                    self.home_art_needs_redraw = true;
+                }
             }
             Action::SwitchTabReverse => {
                 if self.kitty_supported {
@@ -1022,13 +1030,17 @@ impl App {
                 }
                 self.active_tab = self.active_tab.prev();
                 self.search_filter = None;
-                if self.active_tab == Tab::Home { self.refresh_home_data(); }
+                if self.active_tab == Tab::Home {
+                    self.refresh_home_data();
+                    self.home_art_needs_redraw = true;
+                }
             }
             Action::GoToHome => {
                 if self.kitty_supported { let _ = crate::ui::kitty_art::clear_image(); }
                 self.active_tab = Tab::Home;
                 self.search_filter = None;
                 self.refresh_home_data();
+                self.home_art_needs_redraw = true;
             }
             Action::GoToBrowser => {
                 if self.kitty_supported {
@@ -1213,6 +1225,7 @@ impl App {
                     let saved_section = self.home.active_section;
                     self.refresh_home_data();
                     self.home.active_section = saved_section;
+                    self.home_art_needs_redraw = true;
                 }
             }
             Action::HomeAlbumLeft => {
@@ -1223,6 +1236,7 @@ impl App {
                             if self.home.album_selected_index < self.home.album_scroll_offset {
                                 self.home.album_scroll_offset = self.home.album_selected_index;
                             }
+                            self.home_art_needs_redraw = true;
                         }
                     } else {
                         // In bottom panes: h escapes to previous section.
@@ -1243,6 +1257,7 @@ impl App {
                             if self.home.album_selected_index > scroll_end {
                                 self.home.album_scroll_offset += 1;
                             }
+                            self.home_art_needs_redraw = true;
                         }
                     } else {
                         // In bottom panes: l escapes to next section.
