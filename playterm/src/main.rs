@@ -3,6 +3,7 @@ mod app;
 mod color;
 mod config;
 mod keybinds;
+mod lyrics;
 mod persist;
 mod state;
 mod theme;

@@ -309,17 +309,22 @@ impl App {
         });
     }
 
-    /// Spawn a task to fetch lyrics for a song via `getLyricsBySongId`.
+    /// Spawn a task to fetch lyrics for a song from LRCLib.
     ///
     /// Soft-fails silently — on any error an empty `lines` vec is delivered so
     /// the UI shows "No lyrics available" rather than a loading spinner forever.
-    pub fn fetch_lyrics(&mut self, song_id: String) {
+    pub fn fetch_lyrics(
+        &mut self,
+        song_id: String,
+        artist: String,
+        title: String,
+        album: String,
+    ) {
         self.lyrics_loading = true;
         self.lyrics_scroll = 0;
-        let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
         tokio::spawn(async move {
-            let lines = client.get_lyrics_by_song_id(&song_id).await.unwrap_or_default();
+            let lines = crate::lyrics::fetch_lyrics(&artist, &title, &album).await;
             let _ = tx.send(LibraryUpdate::Lyrics { song_id, lines }).await;
         });
     }
@@ -522,7 +527,12 @@ impl App {
                         .map(|(id, _)| id == &song.id)
                         .unwrap_or(false);
                     if !cached_for_song {
-                        self.fetch_lyrics(song.id.clone());
+                        self.fetch_lyrics(
+                            song.id.clone(),
+                            song.artist.clone().unwrap_or_default(),
+                            song.title.clone(),
+                            song.album.clone().unwrap_or_default(),
+                        );
                     }
                     self.playback.current_song = Some(song);
                 }
@@ -570,7 +580,12 @@ impl App {
                         .map(|(id, _)| id == &song.id)
                         .unwrap_or(false);
                     if !cached_for_song {
-                        self.fetch_lyrics(song.id.clone());
+                        self.fetch_lyrics(
+                            song.id.clone(),
+                            song.artist.clone().unwrap_or_default(),
+                            song.title.clone(),
+                            song.album.clone().unwrap_or_default(),
+                        );
                     }
                     self.playback.current_song = Some(song);
                 }
@@ -742,7 +757,12 @@ impl App {
                                 .map(|(id, _)| id == &song.id)
                                 .unwrap_or(false);
                             if !cached {
-                                self.fetch_lyrics(song.id.clone());
+                                self.fetch_lyrics(
+                                    song.id.clone(),
+                                    song.artist.clone().unwrap_or_default(),
+                                    song.title.clone(),
+                                    song.album.clone().unwrap_or_default(),
+                                );
                             }
                         }
                     }

@@ -209,40 +209,4 @@ pub(crate) struct SearchBody {
     pub search_result3: Option<SearchResult3>,
 }
 
-// ── OpenSubsonic getLyricsBySongId envelopes ──────────────────────────────────
-
-#[derive(Deserialize)]
-pub(crate) struct LyricsEnvelope {
-    #[serde(rename = "subsonic-response")]
-    pub response: LyricsBody,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct LyricsBody {
-    pub status: String,
-    pub lyrics_list: Option<LyricsList>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct LyricsList {
-    #[serde(default)]
-    pub structured_lyrics: Vec<StructuredLyrics>,
-}
-
-#[derive(Deserialize)]
-pub(crate) struct StructuredLyrics {
-    pub synced: bool,
-    #[serde(default)]
-    pub line: Vec<LyricLineRaw>,
-}
-
-/// Raw lyric line from the JSON response.
-#[derive(Deserialize)]
-pub(crate) struct LyricLineRaw {
-    /// Start offset in milliseconds (only present for synced lyrics).
-    pub start: Option<i64>,
-    pub value: String,
-}
 

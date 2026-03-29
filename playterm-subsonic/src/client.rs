@@ -21,9 +21,8 @@ use std::time::Duration;
 
 use crate::error::check_status;
 use crate::models::{
-    Album, AlbumEnvelope, Artist, ArtistEnvelope, Artists, ArtistsEnvelope, LyricLine,
-    LyricsEnvelope, PingEnvelope, SearchEnvelope, SearchResult3, Song, SongEnvelope,
-    SubsonicLibrary,
+    Album, AlbumEnvelope, Artist, ArtistEnvelope, Artists, ArtistsEnvelope,
+    PingEnvelope, SearchEnvelope, SearchResult3, Song, SongEnvelope, SubsonicLibrary,
 };
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -279,63 +278,6 @@ impl SubsonicClient {
             .bytes()
             .await?;
         Ok(bytes.to_vec())
-    }
-
-    /// Fetch timestamped or plain lyrics for a song via the OpenSubsonic
-    /// `getLyricsBySongId` extension.
-    ///
-    /// Returns an empty `Vec` (not an error) when:
-    /// - The server does not support the endpoint.
-    /// - The song has no lyrics in the database.
-    /// - Any network or parse failure occurs.
-    pub async fn get_lyrics_by_song_id(&self, song_id: &str) -> Result<Vec<LyricLine>> {
-        let mut params = self.auth_params();
-        params.push(("id", song_id.to_string()));
-
-        // Soft-fail on any network error.
-        let resp = match self
-            .http
-            .get(self.endpoint_url("getLyricsBySongId"))
-            .query(&params)
-            .send()
-            .await
-        {
-            Ok(r) => r,
-            Err(_) => return Ok(vec![]),
-        };
-
-        // Soft-fail on non-JSON or unexpected shape.
-        let env: LyricsEnvelope = match resp.json().await {
-            Ok(e) => e,
-            Err(_) => return Ok(vec![]),
-        };
-
-        // Non-ok status (e.g. endpoint not supported) → empty.
-        if env.response.status != "ok" {
-            return Ok(vec![]);
-        }
-
-        let lyrics_list = match env.response.lyrics_list {
-            Some(l) => l,
-            None => return Ok(vec![]),
-        };
-
-        if lyrics_list.structured_lyrics.is_empty() {
-            return Ok(vec![]);
-        }
-
-        // Prefer synced entry; fall back to first available.
-        let entry = lyrics_list.structured_lyrics.iter()
-            .find(|s| s.synced)
-            .or_else(|| lyrics_list.structured_lyrics.first())
-            .unwrap(); // safe: non-empty checked above
-
-        Ok(entry.line.iter().map(|l| LyricLine {
-            time: l.start
-                .filter(|&ms| ms >= 0)
-                .map(|ms| std::time::Duration::from_millis(ms as u64)),
-            text: l.value.clone(),
-        }).collect())
     }
 
     /// Mark a song as played (scrobble).
