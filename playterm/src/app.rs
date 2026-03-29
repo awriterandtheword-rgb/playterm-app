@@ -413,13 +413,13 @@ impl App {
         self.home.album_scroll_offset = 0;
         self.home.album_selected_index = 0;
 
-        // Recent tracks: last 10 from history (most recent first).
+        // Recent tracks: last 15 from history (most recent first).
         let total = self.history.records.len();
-        let start = total.saturating_sub(10);
+        let start = total.saturating_sub(15);
         self.home.recent_tracks = self.history.records[start..].iter().cloned().rev().collect();
 
-        // Top 5 artists by play count.
-        self.home.top_artists = self.history.top_artists(5);
+        // Top 15 artists by play count.
+        self.home.top_artists = self.history.top_artists(15);
 
         // Rediscover: build library artist pairs from loaded state.
         let library_artist_pairs: Vec<(String, String)> =
@@ -428,7 +428,7 @@ impl App {
             } else {
                 Vec::new()
             };
-        self.home.rediscover = self.history.rediscover_artists(5, &library_artist_pairs);
+        self.home.rediscover = self.history.rediscover_artists(15, &library_artist_pairs);
 
         // Reset cursor / section.
         self.home.selected_index = 0;
