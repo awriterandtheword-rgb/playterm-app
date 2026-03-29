@@ -375,6 +375,16 @@ fn handle_command(
 
 fn download_and_decode(url: &str) -> Result<Decoder<BufReader<crate::stream::StreamingReader>>> {
     let reader = open_stream(url)?;
-    let decoder = Decoder::try_from(BufReader::new(reader))?;
+    // with_seekable(true): tells symphonia the stream supports random access;
+    //   without this, ReadSeekSource::is_seekable() returns false and symphonia
+    //   treats the stream as forward-only, causing all seeks to fail.
+    // with_coarse_seek(true): bypasses the time_base requirement for accurate
+    //   seeking (unavailable on transcoded MP3 streams); seeks to the nearest
+    //   keyframe, which is accurate enough for a music player.
+    let decoder = Decoder::builder()
+        .with_data(BufReader::new(reader))
+        .with_seekable(true)
+        .with_coarse_seek(true)
+        .build()?;
     Ok(decoder)
 }
