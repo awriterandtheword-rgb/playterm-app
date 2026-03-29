@@ -17,6 +17,8 @@ struct FileConfig {
     pub theme: ThemeSection,
     #[serde(default)]
     pub ui: UiSection,
+    #[serde(default)]
+    pub cache: CacheSection,
 }
 
 // ── [keybinds] ────────────────────────────────────────────────────────────────
@@ -49,6 +51,28 @@ pub struct KeybindsSection {
 // ── [theme] ───────────────────────────────────────────────────────────────────
 
 // ── [ui] ─────────────────────────────────────────────────────────────────────
+
+// ── [cache] ───────────────────────────────────────────────────────────────────
+
+/// Offline track cache settings from config.toml.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CacheSection {
+    /// Whether the track cache is enabled. Default: true.
+    #[serde(default = "default_cache_enabled")]
+    pub enabled: bool,
+    /// Maximum total cache size in gigabytes. Default: 2.0.
+    #[serde(default = "default_cache_max_size_gb")]
+    pub max_size_gb: f64,
+}
+
+fn default_cache_enabled() -> bool { true }
+fn default_cache_max_size_gb() -> f64 { 2.0 }
+
+impl Default for CacheSection {
+    fn default() -> Self {
+        Self { enabled: default_cache_enabled(), max_size_gb: default_cache_max_size_gb() }
+    }
+}
 
 /// UI preferences from config.toml.
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
@@ -114,6 +138,10 @@ pub struct Config {
     pub theme:    ThemeSection,
     /// Whether to show the lyrics overlay on startup.
     pub lyrics_visible: bool,
+    /// Whether the offline track cache is enabled.
+    pub cache_enabled:     bool,
+    /// Maximum total cache size in gigabytes.
+    pub cache_max_size_gb: f64,
 }
 
 impl Config {
@@ -146,14 +174,16 @@ impl Config {
         }
 
         Ok(Config {
-            subsonic_url:   file_cfg.server.url,
-            subsonic_user:  file_cfg.server.username,
-            subsonic_pass:  file_cfg.server.password,
-            default_volume: file_cfg.player.default_volume,
-            max_bit_rate:   file_cfg.player.max_bit_rate,
-            keybinds:       file_cfg.keybinds,
-            theme:          file_cfg.theme,
-            lyrics_visible: file_cfg.ui.lyrics,
+            subsonic_url:      file_cfg.server.url,
+            subsonic_user:     file_cfg.server.username,
+            subsonic_pass:     file_cfg.server.password,
+            default_volume:    file_cfg.player.default_volume,
+            max_bit_rate:      file_cfg.player.max_bit_rate,
+            keybinds:          file_cfg.keybinds,
+            theme:             file_cfg.theme,
+            lyrics_visible:    file_cfg.ui.lyrics,
+            cache_enabled:     file_cfg.cache.enabled,
+            cache_max_size_gb: file_cfg.cache.max_size_gb,
         })
     }
 }
@@ -219,6 +249,10 @@ max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 
 [ui]
 lyrics = false   # show lyrics overlay on NowPlaying tab (toggle with L)
+
+[cache]
+enabled     = true
+max_size_gb = 2   # maximum total cache size in gigabytes
 "##;
     std::fs::write(path, default_toml)
         .with_context(|| format!("writing default config to {}", path.display()))?;

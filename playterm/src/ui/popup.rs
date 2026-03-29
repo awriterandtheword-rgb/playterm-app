@@ -28,8 +28,7 @@ fn sections() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
         ]),
         ("Queue", vec![
             ("a",       "Add track to queue"),
-            ("A",       "Add album to queue"),
-            ("Shift+A", "Add artist to queue"),
+            ("A",       "On artist / album add to queue"),
             ("D",       "Clear queue"),
         ]),
         ("Volume & Display", vec![

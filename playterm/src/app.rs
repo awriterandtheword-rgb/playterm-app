@@ -1,4 +1,5 @@
 use std::sync::{Arc, mpsc as std_mpsc};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use anyhow::Result;
@@ -98,6 +99,8 @@ pub enum LibraryUpdate {
     CoverArt { cover_id: String, bytes: Vec<u8> },
     /// Lyrics fetched for a song; `lines` is empty when the track has no lyrics.
     Lyrics { song_id: String, lines: Vec<LyricLine> },
+    /// Track bytes downloaded for offline caching.
+    CacheTrack { song_id: String, album_id: String, bytes: Vec<u8> },
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
@@ -135,6 +138,14 @@ pub struct App {
     /// Monotonically increasing counter sent with every `PlayerCommand::PlayUrl`.
     /// The engine uses it to discard stale downloads from rapid skips.
     play_gen: u64,
+
+    // ── Offline cache (Feature 5.3) ───────────────────────────────────────────
+    /// Track file cache (LRU, persisted to `~/.cache/playterm/`).
+    pub cache: crate::cache::TrackCache,
+    /// Monotonically increasing counter for background download tasks.
+    /// Incremented on every `play_current()` call. Background tasks discard
+    /// their result if the gen has advanced since they were spawned.
+    prefetch_gen: Arc<AtomicU64>,
 
     // ── Help popup (Feature 5.2.1) ────────────────────────────────────────────
     /// Whether the keybind reference popup is open.
@@ -178,6 +189,7 @@ impl App {
         let theme    = Theme::from_section(&config.theme);
         let static_accent = theme.accent;
         let lyrics_visible = config.lyrics_visible;
+        let track_cache = crate::cache::TrackCache::load(config.cache_enabled, config.cache_max_size_gb);
         Ok(Self {
             active_tab: Tab::Browser,
             browser_focus: BrowserColumn::Artists,
@@ -198,6 +210,8 @@ impl App {
             keybinds,
             theme,
             play_gen: 0,
+            cache: track_cache,
+            prefetch_gen: Arc::new(AtomicU64::new(0)),
             help_visible: false,
             lyrics_visible,
             lyrics_cache: None,
@@ -495,6 +509,9 @@ impl App {
                 self.lyrics_cache = Some((song_id, lines));
                 self.lyrics_scroll = 0;
             }
+            LibraryUpdate::CacheTrack { song_id, album_id, bytes } => {
+                let _ = self.cache.put(&song_id, &album_id, &bytes);
+            }
         }
     }
 
@@ -538,6 +555,31 @@ impl App {
                             song.title.clone(),
                             song.album.clone().unwrap_or_default(),
                         );
+                    }
+                    // Background-cache current track + prefetch next 2.
+                    if self.config.cache_enabled {
+                        // Collect (song_id, album_id) pairs to download, then spawn.
+                        // We read from queue and cache separately to satisfy the borrow checker.
+                        let mut to_download: Vec<(String, String)> = Vec::new();
+                        // Current track.
+                        if !self.cache.get_const(&song.id) {
+                            to_download.push((song.id.clone(), song.album_id.clone().unwrap_or_default()));
+                        }
+                        // Next 2 tracks.
+                        let cursor = self.queue.cursor;
+                        for offset in 1..=2usize {
+                            let idx = cursor + offset;
+                            if idx < self.queue.songs.len() {
+                                let s_id = self.queue.songs[idx].id.clone();
+                                let a_id = self.queue.songs[idx].album_id.clone().unwrap_or_default();
+                                if !self.cache.get_const(&s_id) {
+                                    to_download.push((s_id, a_id));
+                                }
+                            }
+                        }
+                        for (s_id, a_id) in to_download {
+                            self.spawn_cache_download(&s_id, &a_id);
+                        }
                     }
                     self.playback.current_song = Some(song);
                 }
@@ -612,13 +654,60 @@ impl App {
     /// Send a PlayUrl command for the song the queue cursor points at.
     fn play_current(&mut self) {
         if let Some(song) = self.queue.current().cloned() {
-            let url = self.subsonic.stream_url(&song.id, self.config.max_bit_rate);
+            self.play_gen += 1;
+            // Advance the prefetch gen so stale background downloads are discarded.
+            self.prefetch_gen.fetch_add(1, Ordering::Release);
+            let url = self.resolve_stream_url(&song);
             let duration = song.duration.map(|s| std::time::Duration::from_secs(u64::from(s)));
             self.playback.current_song = Some(song);
             self.playback.player_loaded = true;
-            self.play_gen += 1;
             let _ = self.player_tx.send(PlayerCommand::PlayUrl { url, duration, gen: self.play_gen });
         }
+    }
+
+    /// Return the URL to play for `song`.
+    ///
+    /// If the track is in the offline cache, starts a loopback HTTP server that
+    /// serves the cached bytes and returns `http://127.0.0.1:{port}/`.
+    /// Falls back to the Subsonic stream URL on any error or cache miss.
+    fn resolve_stream_url(&mut self, song: &playterm_subsonic::Song) -> String {
+        if self.config.cache_enabled {
+            if let Some(path) = self.cache.get(&song.id) {
+                self.cache.touch(&song.id);
+                match crate::cache::serve_from_cache(path) {
+                    Ok(local_url) => return local_url,
+                    Err(e) => eprintln!("warn: could not serve from cache: {e}"),
+                }
+            }
+        }
+        self.subsonic.stream_url(&song.id, self.config.max_bit_rate)
+    }
+
+    /// Spawn a background task to download `song_id` for caching.
+    ///
+    /// Callers are responsible for checking `cache.get_const()` first.
+    /// The task checks `prefetch_gen` after download and discards stale bytes
+    /// (from rapid skips or queue changes since spawn time).
+    fn spawn_cache_download(&self, song_id: &str, album_id: &str) {
+        let url = self.subsonic.stream_url(song_id, self.config.max_bit_rate);
+        let song_id  = song_id.to_string();
+        let album_id = album_id.to_string();
+        let tx       = self.library_tx.clone();
+        let gen_arc  = self.prefetch_gen.clone();
+        let expected = gen_arc.load(Ordering::Acquire);
+        tokio::spawn(async move {
+            if let Ok(resp) = reqwest::Client::new().get(&url).send().await {
+                if let Ok(bytes) = resp.bytes().await {
+                    if gen_arc.load(Ordering::Acquire) == expected {
+                        let _ = tx.send(LibraryUpdate::CacheTrack {
+                            song_id,
+                            album_id,
+                            bytes: bytes.to_vec(),
+                        }).await;
+                    }
+                }
+            }
+        });
     }
 
     // ── Action dispatch ───────────────────────────────────────────────────────
