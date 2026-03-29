@@ -278,17 +278,13 @@ fn parse_cell_size_response(response: &str) -> Option<(u16, u16)> {
 /// Compute thumbnail size for the home art strip.
 ///
 /// Returns `(thumb_cols, thumb_rows)` in terminal cell units.
-/// The thumbnail is square (height_px × height_px), scaled to `strip_rows` tall.
-pub fn art_strip_thumbnail_size(cell_px: Option<(u16, u16)>, strip_rows: u16) -> (u16, u16) {
-    let (cell_w, cell_h) = cell_px.unwrap_or((8, 16));
-    // Use the larger of cell_w and cell_h so that on terminals where cell
-    // reporting gives a portrait-shaped cell (cell_w < cell_h), we produce a
-    // square thumbnail rather than a squished portrait image.
-    let effective_cell_w = cell_w.max(cell_h);
-    let thumb_height_px = strip_rows as u32 * cell_h as u32;
-    let thumb_cols = (thumb_height_px / effective_cell_w as u32) as u16;
-    let thumb_cols = thumb_cols.max(4).min(16);
-    (thumb_cols, strip_rows)
+/// Both dimensions equal `strip_rows` (square in cell count) — the
+/// `cell_px` parameter is ignored for sizing because CSI 16 t returns
+/// unreliable values on Ghostty macOS.  A fixed 32 px/cell assumption
+/// is used instead when computing pixel dimensions in `render_art_strip`.
+pub fn art_strip_thumbnail_size(_cell_px: Option<(u16, u16)>, strip_rows: u16) -> (u16, u16) {
+    // Square: same number of columns as rows.
+    (strip_rows, strip_rows)
 }
 
 /// How many thumbnails fit horizontally in `terminal_cols` columns.
@@ -323,12 +319,9 @@ pub fn render_art_strip(
 
     let (thumb_cols, thumb_rows) = art_strip_thumbnail_size(cell_px, strip_area.height);
     let visible_count = visible_thumbnail_count(strip_area.width, thumb_cols, 1);
-    let (cell_w, cell_h) = cell_px.unwrap_or((8, 16));
-    // Force square pixel dimensions: use thumb_rows * effective_cell_h for both axes.
-    // This prevents portrait-squished thumbnails on terminals (e.g. Ghostty macOS)
-    // where cell_w < cell_h — album art is always 1:1 so square pixels are correct.
-    let effective_cell_h = cell_h.max(cell_w);
-    let thumb_px = thumb_rows as u32 * effective_cell_h as u32;
+    // Use strip height in cells as both width and height (square grid).
+    // Fixed 32 px/cell — reliable on HiDPI Ghostty; avoids trusting CSI 16 t.
+    let thumb_px = thumb_rows as u32 * 32;
     let px_w = thumb_px;
     let px_h = thumb_px;
 

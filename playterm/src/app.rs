@@ -1371,8 +1371,18 @@ impl App {
     }
 
     fn handle_navigate_home(&mut self, dir: Direction) {
-        // RecentAlbums navigates horizontally via h/l; j/k on it does nothing.
         if self.home.active_section == HomeSection::RecentAlbums {
+            // j/k in the album strip: move to next/prev section.
+            match dir {
+                Direction::Down | Direction::Bottom => {
+                    self.home.active_section = self.home.active_section.next();
+                    self.home.selected_index = 0;
+                }
+                Direction::Up | Direction::Top => {
+                    self.home.active_section = self.home.active_section.prev();
+                    self.home.selected_index = 0;
+                }
+            }
             return;
         }
         let section_len = match self.home.active_section {

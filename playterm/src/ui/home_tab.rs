@@ -60,6 +60,7 @@ pub fn render_home_tab(
     home: &HomeState,
     accent: Color,
     kitty_supported: bool,
+    help_visible: bool,
     home_art_cache: &HashMap<String, Vec<u8>>,
     cell_px: Option<(u16, u16)>,
     theme: &Theme,
@@ -89,8 +90,10 @@ pub fn render_home_tab(
     let albums_inner = albums_block.inner(top_area);
     f.render_widget(albums_block, top_area);
 
-    if kitty_supported {
+    if kitty_supported && !help_visible {
         // Render art strip inside the inner area.
+        // Suppressed while the help popup is open to prevent Kitty images
+        // from painting over the ratatui popup layer.
         // thumb height = inner_area height minus 2 rows (album name + artist name).
         let thumb_area_h = albums_inner.height.saturating_sub(2).max(1);
         crate::ui::kitty_art::render_art_strip(
