@@ -36,7 +36,23 @@ pub fn extract_accent(image_bytes: &[u8]) -> Option<Color> {
             Some((s, c.r, c.g, c.b))
         })
         .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|(_, r, g, b)| Color::Rgb(r, g, b))
+        .map(|(_, r, g, b)| ensure_readable(Color::Rgb(r, g, b), 0.55))
+}
+
+/// Ensure a colour is readable on a dark background by lifting its OKLab L
+/// channel to at least `min_lightness`.  Already-bright colours are unchanged.
+pub fn ensure_readable(color: Color, min_lightness: f32) -> Color {
+    let (r, g, b) = match color {
+        Color::Rgb(r, g, b) => (r, g, b),
+        _ => return color,
+    };
+    let mut lab = rgb_to_oklab(r, g, b);
+    if lab[0] >= min_lightness {
+        return color;
+    }
+    lab[0] = min_lightness;
+    let (r, g, b) = oklab_to_rgb(lab);
+    Color::Rgb(r, g, b)
 }
 
 /// Interpolate between two ratatui `Rgb` colours in OKLab space.
