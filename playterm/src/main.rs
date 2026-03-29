@@ -403,10 +403,17 @@ fn handle_home_click(x: u16, y: u16, app: &mut App, center: ratatui::layout::Rec
 fn map_key(code: KeyCode, modifiers: KeyModifiers, active_tab: Tab, kb: &Keybinds) -> Action {
     // ── Home-tab-specific keys ────────────────────────────────────────────────
     if active_tab == Tab::Home {
-        // J / S-j: move to next section
-        if code == KeyCode::Char('J') { return Action::HomeSectionNext; }
-        // K / S-k: move to previous section
-        if code == KeyCode::Char('K') { return Action::HomeSectionPrev; }
+        // J / Shift+j: move to next section.
+        // Handle both KeyCode::Char('J') (most terminals) and
+        // KeyCode::Char('j')+SHIFT (Ghostty / kitty keyboard protocol).
+        let shift = modifiers.intersects(KeyModifiers::SHIFT);
+        if code == KeyCode::Char('J') || (code == KeyCode::Char('j') && shift) {
+            return Action::HomeSectionNext;
+        }
+        // K / Shift+k: move to previous section.
+        if code == KeyCode::Char('K') || (code == KeyCode::Char('k') && shift) {
+            return Action::HomeSectionPrev;
+        }
         // r: re-roll rediscover / refresh data
         if code == KeyCode::Char('r') && modifiers.is_empty() { return Action::HomeRefresh; }
         // h/l: navigate album strip left/right (only active when RecentAlbums section is focused)
