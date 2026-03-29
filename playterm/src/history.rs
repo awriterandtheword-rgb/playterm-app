@@ -140,7 +140,12 @@ impl PlayHistory {
                 .collect();
 
             if candidates.len() >= n {
-                // Bias: sort by play_count ascending (least-played first).
+                // Shuffle within play-count tiers so results vary on each re-roll.
+                use rand::seq::SliceRandom;
+                let mut rng = rand::thread_rng();
+                candidates.shuffle(&mut rng);
+                // Then stable-sort by play_count so least-played still come first,
+                // but ties are in random order.
                 candidates.sort_by_key(|(_, _, c)| *c);
                 return candidates
                     .into_iter()
@@ -150,12 +155,15 @@ impl PlayHistory {
             }
         }
 
-        // Fallback: return the first n from the library (deterministic, no rand dep).
-        library_artist_ids
+        // Fallback: shuffle the library slice so each re-roll picks differently.
+        use rand::seq::SliceRandom;
+        let mut rng = rand::thread_rng();
+        let mut all: Vec<(String, String)> = library_artist_ids
             .iter()
-            .take(n)
             .map(|(id, name)| (id.clone(), name.clone()))
-            .collect()
+            .collect();
+        all.shuffle(&mut rng);
+        all.into_iter().take(n).collect()
     }
 
     /// Load from a JSON file.  Returns `Default` if the file does not exist.

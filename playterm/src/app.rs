@@ -1208,7 +1208,11 @@ impl App {
             }
             Action::HomeRefresh => {
                 if self.active_tab == Tab::Home {
+                    // Preserve the active section so the user stays in Rediscover
+                    // after pressing r — the re-roll is visible immediately.
+                    let saved_section = self.home.active_section;
                     self.refresh_home_data();
+                    self.home.active_section = saved_section;
                 }
             }
             Action::HomeAlbumLeft => {
