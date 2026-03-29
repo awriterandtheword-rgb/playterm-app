@@ -108,7 +108,14 @@ async fn run_loop(
         // ── Kitty album art (rendered after ratatui so it sits above text) ──────
         if app.kitty_supported {
             if app.active_tab == app::Tab::NowPlaying {
-                if let Some((cover_id, bytes)) = &app.art_cache {
+                if app.help_visible {
+                    // Popup is open — clear any displayed art so the Kitty
+                    // image doesn't paint over the ratatui popup layer.
+                    if art_displayed {
+                        let _ = ui::kitty_art::clear_image();
+                        art_displayed = false;
+                    }
+                } else if let Some((cover_id, bytes)) = &app.art_cache {
                     let sz = terminal.size()?;
                     let art_rect = ui::layout::art_rect(Rect::new(0, 0, sz.width, sz.height));
                     let stored_matches = last_rendered_art
