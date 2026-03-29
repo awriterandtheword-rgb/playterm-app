@@ -26,14 +26,18 @@ pub fn render_visualizer(f: &mut Frame, area: Rect, bands: &[f32], accent: Color
         return;
     }
 
+    // Drop the last 2 bands: the highest-frequency bars are sparse single-bin
+    // regions that spike independently and look like noise.  Rendering 30 of
+    // the 32 computed bands cuts the noisy tail without touching the FFT logic.
+    let visible_bands = bands.len().saturating_sub(2);
     let num_bars = ((area.width / 2) as usize)
-        .min(32)
+        .min(30)
         .max(8)
-        .min(bands.len());
+        .min(visible_bands);
 
     for i in 0..num_bars {
-        // Map bar index to the corresponding band (bands always has 32 elements).
-        let band_idx = i * bands.len() / num_bars;
+        // Map bar index to the corresponding visible band (first 30 of 32).
+        let band_idx = i * visible_bands / num_bars;
         let band_val = bands[band_idx].clamp(0.0, 1.0);
 
         // Total height in units of 1/8 of a row.
