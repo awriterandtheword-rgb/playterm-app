@@ -167,11 +167,16 @@ async fn run_loop(
             } else if last_tab != app.active_tab {
                 // Switched away from any tab — clear any visible Kitty
                 // placement so it doesn't float above the new tab's content.
-                // clear_image() uses a=d,d=A which removes the on-screen
-                // placement only; the image data stays in the terminal's store,
-                // so display_image() can redisplay it instantly on tab-back.
                 if art_displayed {
                     let _ = ui::kitty_art::clear_image();
+                    art_displayed = false;
+                }
+                // Entering NowPlaying: drop stored render state so the art is
+                // fully re-transmitted on the next frame.  The fast display_image()
+                // path (a=p,i=1) can silently fail if the terminal evicted the
+                // stored image; a full render_image() is always reliable.
+                if app.active_tab == app::Tab::NowPlaying {
+                    last_rendered_art = None;
                     art_displayed = false;
                 }
             }

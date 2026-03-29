@@ -133,10 +133,7 @@ pub fn open_stream(url: &str) -> Result<StreamingReader> {
 // ── Download thread ───────────────────────────────────────────────────────────
 
 fn download_thread(url: &str, inner: Arc<StreamInner>) {
-    let result = download_into(url, &inner);
-    if let Err(e) = result {
-        eprintln!("stream download error: {e}");
-    }
+    let _ = download_into(url, &inner);
     inner.done.store(true, Ordering::Release);
     inner.cond.notify_all();
 }
