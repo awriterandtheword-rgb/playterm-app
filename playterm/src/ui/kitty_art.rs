@@ -86,6 +86,34 @@ pub fn detect_kitty_support() -> bool {
     result
 }
 
+// ── Debug logging ─────────────────────────────────────────────────────────────
+
+/// Append a timestamped line to `~/.local/share/playterm/kitty_debug.log`.
+///
+/// Only called when `in_tmux == true`.  Uses only `std::fs` — no extra deps.
+pub fn kitty_log(msg: &str) {
+    use std::fs::OpenOptions;
+    use std::io::Write as _;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let home = match std::env::var("HOME") {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+    let dir = format!("{home}/.local/share/playterm");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = format!("{dir}/kitty_debug.log");
+
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "[{ts}] {msg}");
+    }
+}
+
 // ── tmux passthrough helper ───────────────────────────────────────────────────
 
 /// Build a Kitty APC sequence, optionally wrapped for tmux DCS passthrough.
@@ -168,8 +196,14 @@ pub fn render_image(bytes: &[u8], area: Rect, in_tmux: bool) -> Result<()> {
                 "{}",
                 apc(&format!("a=T,f=32,i=1,s={w},v={h},c={inner_w},r={inner_h},o=z,m={m},q=2;{chunk_str}"), in_tmux)
             )?;
+            if in_tmux {
+                kitty_log(&format!("render_image chunk=0/{n} a=T,f=32,i=1,s={w},v={h},c={inner_w},r={inner_h},o=z,m={m},q=2"));
+            }
         } else {
             write!(out, "{}", apc(&format!("m={m};{chunk_str}"), in_tmux))?;
+            if in_tmux {
+                kitty_log(&format!("render_image chunk={i}/{n} m={m}"));
+            }
         }
     }
 
@@ -183,6 +217,9 @@ pub fn render_image(bytes: &[u8], area: Rect, in_tmux: bool) -> Result<()> {
 pub fn clear_image(in_tmux: bool) -> Result<()> {
     let mut out = io::stdout().lock();
     write!(out, "{}", apc("a=d,d=A,q=2", in_tmux))?;
+    if in_tmux {
+        kitty_log("clear_image a=d,d=A,q=2");
+    }
     out.flush()?;
     Ok(())
 }
@@ -369,8 +406,14 @@ pub fn render_art_strip(
                         "{}",
                         apc(&format!("a=t,f=32,i={kitty_id},s={w},v={h},o=z,m={m},q=2;{chunk_str}"), in_tmux)
                     );
+                    if in_tmux {
+                        kitty_log(&format!("render_art_strip id={kitty_id} chunk=0/{n} a=t,f=32,s={w},v={h},o=z,m={m},q=2"));
+                    }
                 } else {
                     let _ = write!(out, "{}", apc(&format!("m={m};{chunk_str}"), in_tmux));
+                    if in_tmux {
+                        kitty_log(&format!("render_art_strip id={kitty_id} chunk={ci}/{n} m={m}"));
+                    }
                 }
             }
 
@@ -382,6 +425,9 @@ pub fn render_art_strip(
                 col + 1,
                 apc(&format!("a=p,i={kitty_id},p=1,c={thumb_cols},r={thumb_rows},q=2;"), in_tmux)
             );
+            if in_tmux {
+                kitty_log(&format!("render_art_strip id={kitty_id} a=p,p=1,c={thumb_cols},r={thumb_rows},q=2 col={col} row={row}"));
+            }
             let _ = out.flush();
         }
         // If bytes are NOT in cache, leave the cells blank — ratatui has already
@@ -396,6 +442,9 @@ pub fn clear_art_strip(in_tmux: bool) -> Result<()> {
     let mut out = io::stdout().lock();
     for id in 100u32..=115 {
         write!(out, "{}", apc(&format!("a=d,d=I,i={id},q=2"), in_tmux))?;
+    }
+    if in_tmux {
+        kitty_log("clear_art_strip a=d,d=I ids=100..=115");
     }
     out.flush()?;
     Ok(())

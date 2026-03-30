@@ -50,6 +50,14 @@ async fn main() -> Result<()> {
     // Detect tmux: $TMUX is set when the process is running inside a tmux session.
     app.in_tmux = std::env::var("TMUX").is_ok();
 
+    // Log detection results when running inside tmux (debug aid for Kitty issues).
+    if app.in_tmux {
+        ui::kitty_art::kitty_log(&format!(
+            "startup: in_tmux=true kitty_supported={}",
+            app.kitty_supported
+        ));
+    }
+
     // Query cell pixel dimensions (used for art strip sizing).
     // Attempted only if Kitty is supported — non-Kitty terminals may not respond.
     if app.kitty_supported {
