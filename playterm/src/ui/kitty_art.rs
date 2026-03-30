@@ -171,6 +171,15 @@ pub fn render_image(bytes: &[u8], area: Rect, in_tmux: bool, tmux_status_offset:
         return Ok(());
     }
 
+    // In tmux mode the placeholder rows start at area.y + 1 + tmux_status_offset.
+    // Cap to inner_h so that when offset > 1 the last row never overruns the
+    // inner area's bottom.  For the common case (offset == 1) this equals inner_h.
+    let tmux_rows = if in_tmux {
+        inner_h.min(area.height.saturating_sub(1 + tmux_status_offset))
+    } else {
+        inner_h
+    };
+
     // Decode image from raw bytes.
     let img = image::load_from_memory(bytes)?;
 
@@ -178,7 +187,7 @@ pub fn render_image(bytes: &[u8], area: Rect, in_tmux: bool, tmux_status_offset:
     // (a reasonable approximation for most terminals).  Cap at 1024 to avoid
     // transferring enormous payloads on very large terminals.
     let px_w = (inner_w as u32 * 10).min(1024);
-    let px_h = (inner_h as u32 * 20).min(1024);
+    let px_h = (if in_tmux { tmux_rows } else { inner_h } as u32 * 20).min(1024);
     let img = img.resize(px_w, px_h, image::imageops::FilterType::Lanczos3);
     let img_rgba = img.to_rgba8();
     let (w, h) = img_rgba.dimensions();
@@ -225,13 +234,13 @@ pub fn render_image(bytes: &[u8], area: Rect, in_tmux: bool, tmux_status_offset:
         write!(
             out,
             "{}",
-            apc(&format!("a=p,U=1,i=1,c={inner_w},r={inner_h},q=2"), true)
+            apc(&format!("a=p,U=1,i=1,c={inner_w},r={tmux_rows},q=2"), true)
         )?;
 
         // Step 3: Write placeholder characters row-by-row at the image position.
         // These are normal terminal text cells — tmux can overwrite them on window
         // switch, which is exactly what prevents the bleed.
-        for row in 0..inner_h {
+        for row in 0..tmux_rows {
             write!(
                 out,
                 "\x1b[{};{}H{}",
