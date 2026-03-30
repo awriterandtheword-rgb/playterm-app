@@ -174,6 +174,14 @@ pub fn render_image(bytes: &[u8], area: Rect, in_tmux: bool) -> Result<()> {
     // Write to stdout.
     let mut out = io::stdout().lock();
 
+    // In tmux: delete any previous image before transmitting the new one.
+    // tmux doesn't track Kitty placements across windows/panes, so stale images
+    // bleed through without an explicit delete-all up front.
+    if in_tmux {
+        let _ = write!(out, "{}", apc("a=d,d=A,q=2", true));
+        kitty_log("render_image: pre-clear a=d,d=A,q=2");
+    }
+
     // Move cursor to the inner-area top-left (terminal coords are 1-based).
     write!(out, "\x1b[{};{}H", inner_y + 1, inner_x + 1)?;
 
@@ -348,6 +356,15 @@ pub fn render_art_strip(
     use base64::Engine;
     use flate2::Compression;
     use flate2::write::ZlibEncoder;
+
+    // In tmux: delete previous art strip placements before drawing new ones.
+    if in_tmux {
+        let mut out = io::stdout().lock();
+        for id in 100u32..=115 {
+            let _ = write!(out, "{}", apc(&format!("a=d,d=I,i={id},q=2"), true));
+        }
+        kitty_log("render_art_strip: pre-clear ids=100..=115");
+    }
 
     let (thumb_cols, thumb_rows) = art_strip_thumbnail_size(cell_px, strip_area.height);
     let visible_count = visible_thumbnail_count(strip_area.width, thumb_cols, 1);

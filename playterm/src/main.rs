@@ -20,8 +20,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-    MouseButton, MouseEventKind,
+    self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event,
+    KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -60,7 +60,7 @@ async fn main() -> Result<()> {
     // Log detection results when running inside tmux (debug aid for Kitty issues).
     if app.in_tmux {
         ui::kitty_art::kitty_log(&format!(
-            "startup: in_tmux=true kitty_supported={} (probe skipped)",
+            "startup: in_tmux=true kitty_supported={} (probe skipped); focus events enabled — ensure `set -g focus-events on` is in tmux.conf",
             app.kitty_supported
         ));
     }
@@ -110,6 +110,11 @@ async fn main() -> Result<()> {
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
     stdout.execute(EnableMouseCapture)?;
+    // Enable focus-change reporting so we can clear Kitty images when the user
+    // switches to another tmux window/pane (requires `focus-events on` in tmux.conf).
+    if app.in_tmux {
+        stdout.execute(EnableFocusChange)?;
+    }
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -123,6 +128,9 @@ async fn main() -> Result<()> {
     // Restore terminal regardless of errors.
     disable_raw_mode()?;
     terminal.backend_mut().execute(DisableMouseCapture)?;
+    if app.in_tmux {
+        terminal.backend_mut().execute(DisableFocusChange)?;
+    }
     terminal.backend_mut().execute(LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
@@ -315,6 +323,23 @@ async fn run_loop(
                     // Clear art strip thumbnails on resize so they re-render at the new size.
                     if app.kitty_supported && app.active_tab == app::Tab::Home {
                         let _ = ui::kitty_art::clear_art_strip(app.in_tmux);
+                    }
+                }
+                // tmux focus events (requires `focus-events on` in tmux.conf).
+                // FocusLost  → user switched to another tmux window/pane; clear
+                //              Kitty images so they don't bleed into that pane.
+                // FocusGained → we're visible again; force a full redraw.
+                Event::FocusLost => {
+                    if app.kitty_supported && app.in_tmux {
+                        let _ = ui::kitty_art::clear_image(app.in_tmux);
+                        let _ = ui::kitty_art::clear_art_strip(app.in_tmux);
+                        ui::kitty_art::kitty_log("focus_lost: cleared image + art_strip");
+                    }
+                }
+                Event::FocusGained => {
+                    if app.kitty_supported && app.in_tmux {
+                        art_displayed = false;
+                        ui::kitty_art::kitty_log("focus_gained: art_displayed reset for redraw");
                     }
                 }
                 _ => {}
