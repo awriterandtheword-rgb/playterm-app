@@ -466,3 +466,27 @@ pub fn clear_art_strip(in_tmux: bool) -> Result<()> {
     out.flush()?;
     Ok(())
 }
+
+/// Overwrite the cells occupied by a rendered image with spaces.
+///
+/// Alternative / supplementary clearing for tmux: writing blanks to the cells
+/// may cause Ghostty to re-composite and obscure the floating image layer when
+/// tmux redraws the screen for a window switch.  Called alongside the APC
+/// delete on focus-loss.  `area` is the full widget rect (same as passed to
+/// `render_image`).
+pub fn overwrite_image_area_with_spaces(area: Rect) {
+    let inner_x = area.x + 1;
+    let inner_y = area.y + 1;
+    let inner_w = area.width.saturating_sub(2) as usize;
+    let inner_h = area.height.saturating_sub(2);
+    if inner_w == 0 || inner_h == 0 {
+        return;
+    }
+    let blanks = " ".repeat(inner_w);
+    let mut out = io::stdout().lock();
+    for row in 0..inner_h {
+        // Terminal cursor positions are 1-based.
+        let _ = write!(out, "\x1b[{};{}H{}", inner_y + 1 + row, inner_x + 1, blanks);
+    }
+    let _ = out.flush();
+}

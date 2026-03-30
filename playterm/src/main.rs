@@ -97,9 +97,13 @@ async fn main() -> Result<()> {
                 .expect("failed to install SIGTERM handler");
             let mut sighup = signal(SignalKind::hangup())
                 .expect("failed to install SIGHUP handler");
+            // SIGPIPE: stdout/stdin fd closed (e.g. tmux pane killed while piped).
+            let mut sigpipe = signal(SignalKind::pipe())
+                .expect("failed to install SIGPIPE handler");
             tokio::select! {
                 _ = sigterm.recv() => {}
                 _ = sighup.recv()  => {}
+                _ = sigpipe.recv() => {}
             }
             flag.store(true, Ordering::Relaxed);
         });
@@ -287,8 +291,25 @@ async fn run_loop(
         // Poll for events. During visualizer or colour transitions redraw at
         // 33 ms (~30 fps); otherwise 50 ms keeps the progress bar responsive.
         let poll_ms = if app.visualizer_visible || app.accent_transition_active() { 33 } else { 50 };
-        if event::poll(Duration::from_millis(poll_ms))? {
-            match event::read()? {
+        let poll_result = event::poll(Duration::from_millis(poll_ms));
+        match poll_result {
+            // stdin closed / pty destroyed (e.g. tmux pane killed) — quit cleanly.
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe
+                   || e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                app.should_quit = true;
+            }
+            Err(e) => return Err(e.into()),
+            Ok(false) => {}
+            Ok(true) => {
+                let read_result = event::read();
+                match read_result {
+                    // Same stdin-closed handling for the read side.
+                    Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe
+                           || e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                        app.should_quit = true;
+                    }
+                    Err(e) => return Err(e.into()),
+                    Ok(ev) => match ev {
                 Event::Key(key) => {
                     // Only process key-press events; ignore release/repeat to avoid
                     // double-firing on terminals that send all event kinds (e.g. Kitty).
@@ -329,22 +350,36 @@ async fn run_loop(
                 // FocusLost  → user switched to another tmux window/pane; clear
                 //              Kitty images so they don't bleed into that pane.
                 // FocusGained → we're visible again; force a full redraw.
+                //
+                // INVESTIGATION: eprintln! here to confirm events arrive inside tmux.
+                // Check ~/.local/share/playterm/kitty_debug.log for the log entries.
                 Event::FocusLost => {
+                    eprintln!("[debug] FocusLost received in_tmux={} kitty={}", app.in_tmux, app.kitty_supported);
                     if app.kitty_supported && app.in_tmux {
+                        // APC delete via passthrough (may race against tmux window switch).
                         let _ = ui::kitty_art::clear_image(app.in_tmux);
                         let _ = ui::kitty_art::clear_art_strip(app.in_tmux);
-                        ui::kitty_art::kitty_log("focus_lost: cleared image + art_strip");
+                        // Belt-and-suspenders: overwrite the image cells with spaces so
+                        // tmux's next redraw has blank cells to paint over, which may
+                        // cause Ghostty to re-composite and obscure the floating image.
+                        if let Some((_, rect)) = last_rendered_art {
+                            ui::kitty_art::overwrite_image_area_with_spaces(rect);
+                        }
+                        ui::kitty_art::kitty_log("focus_lost: clear_image + clear_art_strip + space_overwrite");
                     }
                 }
                 Event::FocusGained => {
+                    eprintln!("[debug] FocusGained received in_tmux={}", app.in_tmux);
                     if app.kitty_supported && app.in_tmux {
                         art_displayed = false;
                         ui::kitty_art::kitty_log("focus_gained: art_displayed reset for redraw");
                     }
                 }
                 _ => {}
-            }
-        }
+                    } // end Ok(ev) match
+                }     // end read_result match
+            }         // end Ok(true)
+        }             // end poll_result match
 
         // Drain once more so any triggered playback reflects on next frame.
         while let Ok(event) = app.player_rx.try_recv() {
