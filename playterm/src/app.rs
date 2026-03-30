@@ -226,6 +226,9 @@ pub struct App {
     /// Whether playterm is running inside a tmux session.
     /// Set once by `main` at startup via `$TMUX` env var.
     pub in_tmux: bool,
+    /// Row offset caused by a top-positioned tmux status bar (0 or 1).
+    /// Used to correct Unicode placeholder cursor positioning in tmux mode.
+    pub tmux_status_offset: u16,
     /// Terminal cell pixel dimensions `(width_px, height_px)`.
     /// Queried once at startup; `None` if unavailable (fallback: 8×16).
     pub cell_px: Option<(u16, u16)>,
@@ -342,6 +345,7 @@ impl App {
             search_filter: None,
             kitty_supported: false,
             in_tmux: false,
+            tmux_status_offset: 0,
             cell_px: None,
             art_cache: None,
             home_art_cache: HashMap::new(),

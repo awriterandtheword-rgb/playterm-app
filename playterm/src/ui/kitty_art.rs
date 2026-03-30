@@ -158,7 +158,7 @@ fn placeholder_row(cols: u16, image_id: u32, row_index: usize) -> String {
 /// treats the image cells as normal text.  Transmits with `a=t` (store only),
 /// creates a virtual placement with `a=p,U=1`, then writes `U+10EEEE` placeholder
 /// characters row-by-row using absolute cursor positioning.
-pub fn render_image(bytes: &[u8], area: Rect, in_tmux: bool) -> Result<()> {
+pub fn render_image(bytes: &[u8], area: Rect, in_tmux: bool, tmux_status_offset: u16) -> Result<()> {
     use base64::Engine;
     use flate2::Compression;
     use flate2::write::ZlibEncoder;
@@ -235,7 +235,7 @@ pub fn render_image(bytes: &[u8], area: Rect, in_tmux: bool) -> Result<()> {
             write!(
                 out,
                 "\x1b[{};{}H{}",
-                area.y + 1 + row,
+                area.y + 1 + row + tmux_status_offset,
                 area.x + 1,
                 placeholder_row(inner_w, 1, row as usize)
             )?;

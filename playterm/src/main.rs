@@ -46,6 +46,9 @@ async fn main() -> Result<()> {
 
     // Detect tmux first: $TMUX is set when running inside a tmux session.
     app.in_tmux = std::env::var("TMUX").is_ok();
+    if app.in_tmux {
+        app.tmux_status_offset = tmux_status_offset();
+    }
 
     // Detect Kitty graphics support before entering raw mode / alternate screen.
     // Inside tmux the probe fails — tmux intercepts the APC response before it
@@ -219,7 +222,7 @@ async fn run_loop(
                     } else {
                         // Album changed, first display, tab return, or terminal
                         // was resized — full re-encode and re-transmit.
-                        match ui::kitty_art::render_image(bytes, art_rect, app.in_tmux) {
+                        match ui::kitty_art::render_image(bytes, art_rect, app.in_tmux, app.tmux_status_offset) {
                             Ok(()) => {
                                 last_rendered_art = Some((cover_id.clone(), art_rect));
                                 art_displayed = true;
@@ -888,5 +891,29 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
             let clicked_idx = app.queue.scroll + visible_row;
             app.set_queue_cursor(clicked_idx);
         }
+    }
+}
+
+/// Query the tmux status bar position and return a row offset (0 or 1).
+///
+/// Returns 1 when the tmux status bar is enabled and positioned at the top,
+/// because the pane's row 0 maps to Ghostty's row 1 (the status bar occupies row 0).
+/// Returns 0 in all other cases (bottom bar, disabled, or not in tmux).
+fn tmux_status_offset() -> u16 {
+    if std::env::var("TMUX").is_err() {
+        return 0;
+    }
+    let output = std::process::Command::new("tmux")
+        .args(["display-message", "-p", "#{status}#{status-position}"])
+        .output();
+    match output {
+        Ok(o) => {
+            let s = String::from_utf8_lossy(&o.stdout);
+            let s = s.trim();
+            // "ontop" = status on, position top → offset 1
+            // "offbottom" / "offtop" / "onbottom" = no offset
+            if s.starts_with("on") && s.ends_with("top") { 1 } else { 0 }
+        }
+        Err(_) => 1, // safe default: assume top status bar
     }
 }
