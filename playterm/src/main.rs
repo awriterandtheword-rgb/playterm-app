@@ -57,14 +57,6 @@ async fn main() -> Result<()> {
         ui::kitty_art::detect_kitty_support()
     };
 
-    // Log detection results when running inside tmux (debug aid for Kitty issues).
-    if app.in_tmux {
-        ui::kitty_art::kitty_log(&format!(
-            "startup: in_tmux=true kitty_supported={} (probe skipped); focus events enabled — ensure `set -g focus-events on` is in tmux.conf",
-            app.kitty_supported
-        ));
-    }
-
     // Query cell pixel dimensions (used for art strip sizing).
     // Attempted only if Kitty is supported — non-Kitty terminals may not respond.
     if app.kitty_supported {
@@ -351,21 +343,15 @@ async fn run_loop(
                 //              Kitty images so they don't bleed into that pane.
                 // FocusGained → we're visible again; force a full redraw.
                 //
-                // INVESTIGATION: eprintln! here to confirm events arrive inside tmux.
-                // Check ~/.local/share/playterm/kitty_debug.log for the log entries.
                 Event::FocusLost => {
-                    eprintln!("[debug] FocusLost received in_tmux={} kitty={}", app.in_tmux, app.kitty_supported);
                     if app.kitty_supported && app.in_tmux {
                         let _ = ui::kitty_art::clear_image(app.in_tmux);
                         let _ = ui::kitty_art::clear_art_strip(app.in_tmux);
-                        ui::kitty_art::kitty_log("focus_lost: clear_image + clear_art_strip");
                     }
                 }
                 Event::FocusGained => {
-                    eprintln!("[debug] FocusGained received in_tmux={}", app.in_tmux);
                     if app.kitty_supported && app.in_tmux {
                         art_displayed = false;
-                        ui::kitty_art::kitty_log("focus_gained: art_displayed reset for redraw");
                     }
                 }
                 _ => {}

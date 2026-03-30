@@ -86,34 +86,6 @@ pub fn detect_kitty_support() -> bool {
     result
 }
 
-// ── Debug logging ─────────────────────────────────────────────────────────────
-
-/// Append a timestamped line to `~/.local/share/playterm/kitty_debug.log`.
-///
-/// Only called when `in_tmux == true`.  Uses only `std::fs` — no extra deps.
-pub fn kitty_log(msg: &str) {
-    use std::fs::OpenOptions;
-    use std::io::Write as _;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let home = match std::env::var("HOME") {
-        Ok(h) => h,
-        Err(_) => return,
-    };
-    let dir = format!("{home}/.local/share/playterm");
-    let _ = std::fs::create_dir_all(&dir);
-    let path = format!("{dir}/kitty_debug.log");
-
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
-        let _ = writeln!(f, "[{ts}] {msg}");
-    }
-}
-
 // ── tmux passthrough helper ───────────────────────────────────────────────────
 
 /// Build a Kitty APC sequence, optionally wrapped for tmux DCS passthrough.
@@ -231,7 +203,6 @@ pub fn render_image(bytes: &[u8], area: Rect, in_tmux: bool) -> Result<()> {
         // ── Unicode placeholder path (tmux) ───────────────────────────────────
         // Delete any existing virtual placement for ID=1 before re-transmitting.
         let _ = write!(out, "{}", apc("a=d,d=i,i=1,q=2", true));
-        kitty_log("render_image: pre-clear virtual placement i=1");
 
         // Step 1: Transmit image data only (a=t — store, no display).
         // No placement coordinates here; the virtual placement is explicit below.
@@ -245,10 +216,8 @@ pub fn render_image(bytes: &[u8], area: Rect, in_tmux: bool) -> Result<()> {
                     "{}",
                     apc(&format!("a=t,f=32,i=1,s={w},v={h},o=z,m={m},q=2;{chunk_str}"), true)
                 )?;
-                kitty_log(&format!("render_image chunk=0/{n} a=t,f=32,i=1,s={w},v={h},o=z,m={m},q=2"));
             } else {
                 write!(out, "{}", apc(&format!("m={m};{chunk_str}"), true))?;
-                kitty_log(&format!("render_image chunk={i}/{n} m={m}"));
             }
         }
 
@@ -258,7 +227,6 @@ pub fn render_image(bytes: &[u8], area: Rect, in_tmux: bool) -> Result<()> {
             "{}",
             apc(&format!("a=p,U=1,i=1,c={inner_w},r={inner_h},q=2"), true)
         )?;
-        kitty_log(&format!("render_image virtual placement a=p,U=1,i=1,c={inner_w},r={inner_h}"));
 
         // Step 3: Write placeholder characters row-by-row at the image position.
         // These are normal terminal text cells — tmux can overwrite them on window
@@ -267,12 +235,11 @@ pub fn render_image(bytes: &[u8], area: Rect, in_tmux: bool) -> Result<()> {
             write!(
                 out,
                 "\x1b[{};{}H{}",
-                inner_y + 1 + row,
-                inner_x + 1,
+                area.y + 1 + row,
+                area.x + 1,
                 placeholder_row(inner_w, 1, row as usize)
             )?;
         }
-        kitty_log(&format!("render_image placeholder chars written rows={inner_h} cols={inner_w}"));
     } else {
         // ── Direct placement path (non-tmux) — unchanged ──────────────────────
         // Move cursor to the inner-area top-left (terminal coords are 1-based).
@@ -311,7 +278,6 @@ pub fn clear_image(in_tmux: bool) -> Result<()> {
     let mut out = io::stdout().lock();
     if in_tmux {
         write!(out, "{}", apc("a=d,d=i,i=1,q=2", true))?;
-        kitty_log("clear_image a=d,d=i,i=1,q=2 (virtual placement)");
     } else {
         write!(out, "{}", apc("a=d,d=A,q=2", false))?;
     }
@@ -451,7 +417,6 @@ pub fn render_art_strip(
         for id in 100u32..=115 {
             let _ = write!(out, "{}", apc(&format!("a=d,d=i,i={id},q=2"), true));
         }
-        kitty_log("render_art_strip: pre-clear virtual placements ids=100..=115");
     }
 
     let (thumb_cols, thumb_rows) = art_strip_thumbnail_size(cell_px, strip_area.height);
@@ -508,14 +473,8 @@ pub fn render_art_strip(
                         "{}",
                         apc(&format!("a=t,f=32,i={kitty_id},s={w},v={h},o=z,m={m},q=2;{chunk_str}"), in_tmux)
                     );
-                    if in_tmux {
-                        kitty_log(&format!("render_art_strip id={kitty_id} chunk=0/{n} a=t,f=32,s={w},v={h},o=z,m={m},q=2"));
-                    }
                 } else {
                     let _ = write!(out, "{}", apc(&format!("m={m};{chunk_str}"), in_tmux));
-                    if in_tmux {
-                        kitty_log(&format!("render_art_strip id={kitty_id} chunk={ci}/{n} m={m}"));
-                    }
                 }
             }
 
@@ -537,7 +496,6 @@ pub fn render_art_strip(
                         placeholder_row(thumb_cols, kitty_id, pr as usize)
                     );
                 }
-                kitty_log(&format!("render_art_strip id={kitty_id} a=p,U=1 placeholder rows={thumb_rows} col={col} row={row}"));
             } else {
                 // ── Direct placement path (non-tmux) — unchanged ──────────────
                 let _ = write!(
@@ -568,9 +526,6 @@ pub fn clear_art_strip(in_tmux: bool) -> Result<()> {
         } else {
             write!(out, "{}", apc(&format!("a=d,d=I,i={id},q=2"), false))?;
         }
-    }
-    if in_tmux {
-        kitty_log("clear_art_strip a=d,d=i ids=100..=115 (virtual placements)");
     }
     out.flush()?;
     Ok(())
