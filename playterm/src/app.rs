@@ -205,9 +205,9 @@ pub enum LibraryUpdate {
     /// A playlist was successfully renamed.
     PlaylistRenamed { id: String, new_name: String },
     /// A track was successfully added to a playlist.
-    PlaylistTrackAdded { playlist_id: String, playlist_name: String },
+    PlaylistTrackAdded { _playlist_id: String, playlist_name: String },
     /// A track was successfully removed from a playlist.
-    PlaylistTrackRemoved { playlist_id: String, index: usize },
+    PlaylistTrackRemoved { _playlist_id: String, index: usize },
     /// Playlist list fetched for the picker (separate from the overlay's list).
     PlaylistsForPicker(Vec<playterm_subsonic::Playlist>),
 }
@@ -914,7 +914,7 @@ impl App {
                     std::time::Instant::now(),
                 ));
             }
-            LibraryUpdate::PlaylistTrackRemoved { playlist_id: _, index } => {
+            LibraryUpdate::PlaylistTrackRemoved { _playlist_id: _, index } => {
                 if let LoadingState::Loaded(ref mut songs) = self.playlist_overlay.tracks {
                     if index < songs.len() {
                         songs.remove(index);
@@ -2454,7 +2454,7 @@ impl App {
             match client.remove_track_from_playlist(&playlist_id, index).await {
                 Ok(()) => {
                     let _ = tx
-                        .send(LibraryUpdate::PlaylistTrackRemoved { playlist_id, index })
+                        .send(LibraryUpdate::PlaylistTrackRemoved { _playlist_id: playlist_id, index })
                         .await;
                 }
                 Err(e) => eprintln!("remove_track_from_playlist failed: {e}"),
@@ -2486,7 +2486,7 @@ impl App {
                 Ok(()) => {
                     let _ = tx
                         .send(LibraryUpdate::PlaylistTrackAdded {
-                            playlist_id,
+                            _playlist_id: playlist_id,
                             playlist_name,
                         })
                         .await;
