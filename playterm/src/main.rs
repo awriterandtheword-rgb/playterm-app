@@ -175,7 +175,6 @@ async fn run_loop(
     // redisplay it instantly with `a=p,i=1` when switching back.
     let mut last_rendered_art: Option<(String, Rect)> = None;
     let mut art_displayed = false;
-    let mut home_strip_displayed = false;
     let mut last_tab = app.active_tab;
 
     // 2-second fallback timer: re-render album art when it is missing.
@@ -299,7 +298,6 @@ async fn run_loop(
                     app.in_tmux,
                 );
                 app.home_art_needs_redraw = false;
-                home_strip_displayed = true;
                 if app.in_tmux {
                     app.home_art_last_tmux_render = Some(std::time::Instant::now());
                 }
@@ -324,15 +322,6 @@ async fn run_loop(
                     && !app.help_visible
                 {
                     last_rendered_art = None;
-                }
-                // Same recovery for the Home art strip.
-                if app.kitty_supported
-                    && !home_strip_displayed
-                    && !app.home_art_cache.is_empty()
-                    && app.active_tab == app::Tab::Home
-                    && !app.help_visible
-                {
-                    app.home_art_needs_redraw = true;
                 }
             }
         }
@@ -435,7 +424,6 @@ async fn run_loop(
                     // Clear art strip thumbnails on resize so they re-render at the new size.
                     if app.kitty_supported && app.active_tab == app::Tab::Home {
                         let _ = ui::kitty_art::clear_art_strip(app.in_tmux);
-                        home_strip_displayed = false;
                     }
                 }
                 // tmux focus events (requires `focus-events on` in tmux.conf).
@@ -448,7 +436,6 @@ async fn run_loop(
                         let _ = ui::kitty_art::clear_image(app.in_tmux);
                         let _ = ui::kitty_art::clear_art_strip(app.in_tmux);
                         art_displayed = false;
-                        home_strip_displayed = false;
                     }
                 }
                 Event::FocusGained => {
