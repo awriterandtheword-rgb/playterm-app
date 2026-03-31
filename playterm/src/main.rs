@@ -177,6 +177,12 @@ async fn run_loop(
     let mut art_displayed = false;
     let mut last_tab = app.active_tab;
 
+    // 2-second fallback timer: re-render album art when it is missing.
+    // Fires every 2 s; the render block only acts when art_displayed is false,
+    // so it is a no-op during normal playback (no flicker).
+    let mut art_recovery = tokio::time::interval(Duration::from_secs(2));
+    art_recovery.tick().await; // consume the initial immediate tick
+
     loop {
         // Check for SIGTERM / SIGHUP from the signal handler task.
         if signal_quit.load(Ordering::Relaxed) {
@@ -299,11 +305,29 @@ async fn run_loop(
         }
         last_tab = app.active_tab;
 
-        // Poll for events. During visualizer or colour transitions redraw at
-        // 33 ms (~30 fps); otherwise 50 ms keeps the progress bar responsive.
+        // Wait for poll timeout or art-recovery tick — whichever comes first.
+        // During visualizer or colour transitions run at 33 ms (~30 fps);
+        // otherwise 50 ms keeps the progress bar responsive.
         let poll_ms = if app.visualizer_visible || app.accent_transition_active() { 33 } else { 50 };
-        let poll_result = event::poll(Duration::from_millis(poll_ms));
-        match poll_result {
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_millis(poll_ms)) => {}
+            _ = art_recovery.tick() => {
+                // Tick fired: if art is missing and should be shown, nudge the
+                // render block by clearing last_rendered_art.  The full re-encode
+                // runs at the top of the next iteration — no duplicate render logic.
+                if app.kitty_supported
+                    && !art_displayed
+                    && app.art_cache.is_some()
+                    && app.active_tab == app::Tab::NowPlaying
+                    && !app.help_visible
+                {
+                    last_rendered_art = None;
+                }
+            }
+        }
+
+        // Non-blocking drain: process any crossterm event that arrived during the sleep.
+        match event::poll(Duration::from_millis(0)) {
             // stdin closed / pty destroyed (e.g. tmux pane killed) — quit cleanly.
             Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe
                    || e.kind() == std::io::ErrorKind::UnexpectedEof => {
