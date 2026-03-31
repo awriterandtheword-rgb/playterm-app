@@ -435,6 +435,7 @@ async fn run_loop(
                     if app.kitty_supported && app.in_tmux {
                         let _ = ui::kitty_art::clear_image(app.in_tmux);
                         let _ = ui::kitty_art::clear_art_strip(app.in_tmux);
+                        art_displayed = false;
                     }
                 }
                 Event::FocusGained => {
