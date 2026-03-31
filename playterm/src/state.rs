@@ -133,6 +133,20 @@ pub enum PlaylistFocus {
     Tracks,
 }
 
+#[derive(Debug, Clone)]
+pub enum ConfirmAction {
+    DeletePlaylist { id: String, name: String },
+}
+
+#[derive(Debug, Clone, Default)]
+pub enum PlaylistInputMode {
+    #[default]
+    Normal,
+    Creating { buffer: String },
+    Renaming { buffer: String, playlist_id: String },
+    Confirming { action: ConfirmAction },
+}
+
 #[derive(Debug)]
 pub struct PlaylistOverlay {
     pub visible: bool,
@@ -142,6 +156,7 @@ pub struct PlaylistOverlay {
     pub selected_track_index: usize,
     pub focus: PlaylistFocus,
     pub loaded_playlist_id: Option<String>,
+    pub input_mode: PlaylistInputMode,
 }
 
 impl Default for PlaylistOverlay {
@@ -154,6 +169,7 @@ impl Default for PlaylistOverlay {
             selected_track_index: 0,
             focus: PlaylistFocus::List,
             loaded_playlist_id: None,
+            input_mode: PlaylistInputMode::Normal,
         }
     }
 }

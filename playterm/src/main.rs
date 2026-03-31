@@ -324,8 +324,7 @@ async fn run_loop(
                             && app.active_tab == Tab::Browser
                             && !app.help_visible
                         {
-                            // Tab-switch and quit keys bypass the playlist handler
-                            // and route through normal dispatch unchanged.
+                            // Tab-switch keys close the overlay and switch tabs.
                             let is_tab_switch = matches!(
                                 key.code,
                                 KeyCode::Tab
@@ -334,11 +333,13 @@ async fn run_loop(
                                 | KeyCode::Char('2')
                                 | KeyCode::Char('3')
                             );
-                            let is_quit = app.keybinds.quit.matches(key.code, key.modifiers);
-                            if is_tab_switch || is_quit {
-                                if is_tab_switch {
-                                    app.playlist_overlay.visible = false;
-                                }
+                            // Quit key in Normal mode closes the overlay only;
+                            // the user must press q again (overlay closed) to quit.
+                            // In text-input modes q is a typed character — don't intercept.
+                            let is_quit_in_normal = app.keybinds.quit.matches(key.code, key.modifiers)
+                                && matches!(app.playlist_overlay.input_mode, PlaylistInputMode::Normal);
+                            if is_tab_switch {
+                                app.playlist_overlay.visible = false;
                                 let action = map_key(
                                     key.code,
                                     key.modifiers,
@@ -346,6 +347,9 @@ async fn run_loop(
                                     &app.keybinds,
                                 );
                                 app.dispatch(action);
+                            } else if is_quit_in_normal {
+                                // Close overlay; do NOT quit.
+                                app.playlist_overlay.visible = false;
                             } else {
                                 let action = map_playlist_key(
                                     key.code,
@@ -585,6 +589,10 @@ fn map_playlist_key(
             let shift = modifiers.intersects(KeyModifiers::SHIFT);
             match code {
                 KeyCode::Esc   => Action::TogglePlaylistOverlay,
+                // Shift+P toggles the overlay closed (mirrors the map_key open binding).
+                KeyCode::Char('P') | KeyCode::Char('p') if code == KeyCode::Char('P') || shift => {
+                    Action::TogglePlaylistOverlay
+                }
                 KeyCode::Char('k') | KeyCode::Up   => Action::PlaylistScrollUp,
                 KeyCode::Char('j') | KeyCode::Down => Action::PlaylistScrollDown,
                 KeyCode::Char('h') => Action::PlaylistFocusList,

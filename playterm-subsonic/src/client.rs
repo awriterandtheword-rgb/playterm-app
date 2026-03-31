@@ -318,6 +318,108 @@ impl SubsonicClient {
             .ok_or_else(|| anyhow!("missing 'playlist' field in getPlaylist response"))
     }
 
+    /// Create a new empty playlist with the given name (`createPlaylist`).
+    ///
+    /// Returns the created playlist object.  Navidrome nests it under
+    /// `subsonic-response > playlist` (same shape as `getPlaylist`).
+    pub async fn create_playlist(&self, name: &str) -> Result<Playlist> {
+        let mut params = self.auth_params();
+        params.push(("name", name.to_string()));
+        let env: PlaylistEnvelope = self
+            .http
+            .post(self.endpoint_url("createPlaylist"))
+            .query(&params)
+            .send()
+            .await?
+            .json()
+            .await?;
+        let r = &env.response;
+        check_status(&r.status, r.error.as_ref())?;
+        let detail = r
+            .playlist
+            .clone()
+            .ok_or_else(|| anyhow!("missing 'playlist' field in createPlaylist response"))?;
+        Ok(Playlist {
+            id: detail.id,
+            name: detail.name,
+            song_count: detail.song_count,
+            duration: detail.duration,
+            owner: None,
+            public: None,
+        })
+    }
+
+    /// Append a single track to a playlist (`updatePlaylist` + `songIdToAdd`).
+    pub async fn add_track_to_playlist(
+        &self,
+        playlist_id: &str,
+        song_id: &str,
+    ) -> Result<()> {
+        let mut params = self.auth_params();
+        params.push(("playlistId", playlist_id.to_string()));
+        params.push(("songIdToAdd", song_id.to_string()));
+        let env: PingEnvelope = self
+            .http
+            .get(self.endpoint_url("updatePlaylist"))
+            .query(&params)
+            .send()
+            .await?
+            .json()
+            .await?;
+        check_status(&env.response.status, env.response.error.as_ref())
+    }
+
+    /// Remove the track at `index` from a playlist (`updatePlaylist` + `songIndexToRemove`).
+    pub async fn remove_track_from_playlist(
+        &self,
+        playlist_id: &str,
+        index: usize,
+    ) -> Result<()> {
+        let mut params = self.auth_params();
+        params.push(("playlistId", playlist_id.to_string()));
+        params.push(("songIndexToRemove", index.to_string()));
+        let env: PingEnvelope = self
+            .http
+            .get(self.endpoint_url("updatePlaylist"))
+            .query(&params)
+            .send()
+            .await?
+            .json()
+            .await?;
+        check_status(&env.response.status, env.response.error.as_ref())
+    }
+
+    /// Rename a playlist (`updatePlaylist` + `name`).
+    pub async fn rename_playlist(&self, playlist_id: &str, new_name: &str) -> Result<()> {
+        let mut params = self.auth_params();
+        params.push(("playlistId", playlist_id.to_string()));
+        params.push(("name", new_name.to_string()));
+        let env: PingEnvelope = self
+            .http
+            .get(self.endpoint_url("updatePlaylist"))
+            .query(&params)
+            .send()
+            .await?
+            .json()
+            .await?;
+        check_status(&env.response.status, env.response.error.as_ref())
+    }
+
+    /// Delete a playlist by ID (`deletePlaylist`).
+    pub async fn delete_playlist(&self, id: &str) -> Result<()> {
+        let mut params = self.auth_params();
+        params.push(("id", id.to_string()));
+        let env: PingEnvelope = self
+            .http
+            .get(self.endpoint_url("deletePlaylist"))
+            .query(&params)
+            .send()
+            .await?
+            .json()
+            .await?;
+        check_status(&env.response.status, env.response.error.as_ref())
+    }
+
     /// Mark a song as played (scrobble).
     pub async fn scrobble(&self, id: &str) -> Result<()> {
         let mut params = self.auth_params();

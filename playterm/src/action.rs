@@ -85,6 +85,34 @@ pub enum Action {
     PlaylistPlayTrack,
     /// Append the highlighted track to the queue.
     PlaylistAppendTrack,
+    /// Create a new playlist (opens the name-input prompt).
+    PlaylistCreate,
+    /// Delete the currently selected playlist (opens confirmation prompt).
+    PlaylistDelete,
+    /// Rename the currently selected playlist (opens the rename-input prompt).
+    PlaylistRename,
+    /// Remove the highlighted track from the current playlist.
+    PlaylistRemoveTrack,
+    /// Open the playlist picker to add the focused browser track to a playlist.
+    BrowserAddToPlaylist,
+    /// Confirm selection in the playlist picker.
+    PlaylistPickerSelect,
+    /// Cancel and close the playlist picker.
+    PlaylistPickerCancel,
+    /// Scroll up in the playlist picker.
+    PlaylistPickerScrollUp,
+    /// Scroll down in the playlist picker.
+    PlaylistPickerScrollDown,
+    /// Confirm the current text-input field (create / rename).
+    PlaylistInputConfirm,
+    /// Cancel the current text-input field.
+    PlaylistInputCancel,
+    /// Feed a character into the active text-input buffer.
+    PlaylistInputChar(char),
+    /// Confirm the yes/no confirmation prompt.
+    PlaylistConfirmYes,
+    /// Decline the yes/no confirmation prompt.
+    PlaylistConfirmNo,
     Quit,
     None,
 }
