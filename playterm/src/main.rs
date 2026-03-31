@@ -35,7 +35,7 @@ use action::{Action, Direction};
 use app::{App, BrowserColumn, Tab};
 use config::Config;
 use keybinds::Keybinds;
-use state::PlaylistFocus;
+use state::{PlaylistFocus, PlaylistInputMode};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -189,6 +189,9 @@ async fn run_loop(
         // Compute FFT bands for the visualizer (no-op when not visible).
         app.tick_visualizer();
 
+        // Expire status flash messages.
+        app.tick_status_flash();
+
         terminal.draw(|f| ui::render(app, f))?;
 
         // ── Kitty album art (rendered after ratatui so it sits above text) ──────
@@ -313,7 +316,11 @@ async fn run_loop(
                     // Only process key-press events; ignore release/repeat to avoid
                     // double-firing on terminals that send all event kinds (e.g. Kitty).
                     if key.kind == KeyEventKind::Press {
-                        if app.playlist_overlay.visible
+                        if app.playlist_picker.is_some() && !app.help_visible {
+                            // Picker is open: highest priority — swallow all keys.
+                            let action = map_picker_key(key.code, key.modifiers);
+                            app.dispatch(action);
+                        } else if app.playlist_overlay.visible
                             && app.active_tab == Tab::Browser
                             && !app.help_visible
                         {
@@ -344,8 +351,9 @@ async fn run_loop(
                                     key.code,
                                     key.modifiers,
                                     &app.playlist_overlay.focus,
+                                    &app.playlist_overlay.input_mode,
                                 );
-                                app.handle_playlist_action(action);
+                                app.dispatch(action);
                             }
                         } else {
                             let action = if app.help_visible {
@@ -551,32 +559,73 @@ fn handle_home_click(x: u16, y: u16, app: &mut App, center: ratatui::layout::Rec
 /// the active tab is Browser.  Every key that is not handled here produces
 /// `Action::None`, so normal playback/volume keys are intentionally blocked
 /// while the overlay is in the foreground.
-fn map_playlist_key(code: KeyCode, modifiers: KeyModifiers, focus: &PlaylistFocus) -> Action {
-    let shift = modifiers.intersects(KeyModifiers::SHIFT);
-    match code {
-        KeyCode::Esc                               => Action::TogglePlaylistOverlay,
-        KeyCode::Char('k')                         => Action::PlaylistScrollUp,
-        KeyCode::Char('j')                         => Action::PlaylistScrollDown,
-        KeyCode::Char('h')                         => Action::PlaylistFocusList,
-        KeyCode::Char('l')                         => Action::PlaylistFocusTracks,
-        KeyCode::Up                                => Action::PlaylistScrollUp,
-        KeyCode::Down                              => Action::PlaylistScrollDown,
-        KeyCode::Enter => match focus {
-            PlaylistFocus::List   => Action::PlaylistPlayAll,
-            PlaylistFocus::Tracks => Action::PlaylistPlayTrack,
+fn map_playlist_key(
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    focus: &PlaylistFocus,
+    input_mode: &PlaylistInputMode,
+) -> Action {
+    match input_mode {
+        // ── Text-input modes: feed characters into the buffer ──────────────
+        PlaylistInputMode::Creating { .. } | PlaylistInputMode::Renaming { .. } => match code {
+            KeyCode::Esc       => Action::PlaylistInputCancel,
+            KeyCode::Enter     => Action::PlaylistInputConfirm,
+            KeyCode::Backspace => Action::PlaylistInputChar('\x08'),
+            KeyCode::Char(ch)  => Action::PlaylistInputChar(ch),
+            _                  => Action::None,
         },
-        // Shift+A — uppercase A or lowercase a+SHIFT
-        KeyCode::Char('A') | KeyCode::Char('a') if code == KeyCode::Char('A') || shift => {
-            match focus {
-                PlaylistFocus::List   => Action::PlaylistAppendAll,
-                PlaylistFocus::Tracks => Action::PlaylistAppendTrack,
+        // ── Confirmation prompt: y/n ───────────────────────────────────────
+        PlaylistInputMode::Confirming { .. } => match code {
+            KeyCode::Char('y') | KeyCode::Char('Y')                  => Action::PlaylistConfirmYes,
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc   => Action::PlaylistConfirmNo,
+            _                                                          => Action::None,
+        },
+        // ── Normal navigation / mutation ───────────────────────────────────
+        PlaylistInputMode::Normal => {
+            let shift = modifiers.intersects(KeyModifiers::SHIFT);
+            match code {
+                KeyCode::Esc   => Action::TogglePlaylistOverlay,
+                KeyCode::Char('k') | KeyCode::Up   => Action::PlaylistScrollUp,
+                KeyCode::Char('j') | KeyCode::Down => Action::PlaylistScrollDown,
+                KeyCode::Char('h') => Action::PlaylistFocusList,
+                KeyCode::Char('l') => Action::PlaylistFocusTracks,
+                // c: create new playlist
+                KeyCode::Char('c') => Action::PlaylistCreate,
+                // r: rename selected playlist (list pane)
+                KeyCode::Char('r') => Action::PlaylistRename,
+                // X (Shift+x): delete selected playlist
+                KeyCode::Char('X') | KeyCode::Char('x') if code == KeyCode::Char('X') || shift => {
+                    Action::PlaylistDelete
+                }
+                // <: remove highlighted track from playlist (tracks pane)
+                KeyCode::Char('<') if matches!(focus, PlaylistFocus::Tracks) => {
+                    Action::PlaylistRemoveTrack
+                }
+                KeyCode::Enter => match focus {
+                    PlaylistFocus::List   => Action::PlaylistPlayAll,
+                    PlaylistFocus::Tracks => Action::PlaylistPlayTrack,
+                },
+                // Shift+A — append all / append track
+                KeyCode::Char('A') | KeyCode::Char('a') if code == KeyCode::Char('A') || shift => {
+                    match focus {
+                        PlaylistFocus::List   => Action::PlaylistAppendAll,
+                        PlaylistFocus::Tracks => Action::PlaylistAppendTrack,
+                    }
+                }
+                _ => Action::None,
             }
         }
-        KeyCode::Char('>') => match focus {
-            PlaylistFocus::Tracks => Action::PlaylistAppendTrack,
-            PlaylistFocus::List   => Action::None,
-        },
-        _ => Action::None,
+    }
+}
+
+/// Translate a key event into an `Action` when the playlist picker popup is open.
+fn map_picker_key(code: KeyCode, _modifiers: KeyModifiers) -> Action {
+    match code {
+        KeyCode::Esc                          => Action::PlaylistPickerCancel,
+        KeyCode::Enter                        => Action::PlaylistPickerSelect,
+        KeyCode::Char('k') | KeyCode::Up      => Action::PlaylistPickerScrollUp,
+        KeyCode::Char('j') | KeyCode::Down    => Action::PlaylistPickerScrollDown,
+        _                                     => Action::None,
     }
 }
 
@@ -587,6 +636,10 @@ fn map_key(code: KeyCode, modifiers: KeyModifiers, active_tab: Tab, kb: &Keybind
         let shift = modifiers.intersects(KeyModifiers::SHIFT);
         if code == KeyCode::Char('P') || (code == KeyCode::Char('p') && shift) {
             return Action::TogglePlaylistOverlay;
+        }
+        // > — open playlist picker to add focused track to a playlist
+        if code == KeyCode::Char('>') {
+            return Action::BrowserAddToPlaylist;
         }
     }
 

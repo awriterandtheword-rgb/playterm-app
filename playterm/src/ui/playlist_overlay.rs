@@ -7,9 +7,11 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style}; // Modifier used by highlight_style
-use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph};
 
-use crate::state::{LoadingState, PlaylistFocus, PlaylistOverlay};
+use crate::app::PlaylistPicker;
+use crate::state::{ConfirmAction, LoadingState, PlaylistFocus, PlaylistInputMode, PlaylistOverlay};
 use crate::theme::Theme;
 
 // ── Duration helpers ──────────────────────────────────────────────────────────
@@ -76,6 +78,16 @@ pub fn render_playlist_overlay(
 
     render_playlist_list(frame, cols[0], overlay, accent, theme, left_active);
     render_track_list(frame, cols[1], overlay, accent, theme, right_active);
+
+    // Confirm dialog renders on top of both columns when active.
+    if let PlaylistInputMode::Confirming { action } = &overlay.input_mode {
+        let msg = match action {
+            ConfirmAction::DeletePlaylist { name, .. } => {
+                format!(" Delete \"{}\"? [y/n] ", name)
+            }
+        };
+        render_confirm_dialog(frame, overlay_area, &msg, accent, theme);
+    }
 }
 
 // ── Left column ───────────────────────────────────────────────────────────────
@@ -88,6 +100,17 @@ fn render_playlist_list(
     theme: &Theme,
     is_active: bool,
 ) {
+    // Reserve 3 rows for the text-input box when creating/renaming.
+    let (list_area, input_area) = match &overlay.input_mode {
+        PlaylistInputMode::Creating { .. } | PlaylistInputMode::Renaming { .. }
+            if area.height > 3 =>
+        {
+            let split = Layout::vertical([Constraint::Min(0), Constraint::Length(3)]).split(area);
+            (split[0], Some(split[1]))
+        }
+        _ => (area, None),
+    };
+
     let border_color = if is_active { theme.border_active } else { theme.border };
     let title_color  = if is_active { accent }             else { theme.dimmed };
 
@@ -152,7 +175,28 @@ fn render_playlist_list(
 
     let mut state = ListState::default();
     state.select(sel);
-    frame.render_stateful_widget(list, area, &mut state);
+    frame.render_stateful_widget(list, list_area, &mut state);
+
+    // Text-input box (create / rename).
+    if let Some(input_rect) = input_area {
+        let (label, buffer) = match &overlay.input_mode {
+            PlaylistInputMode::Creating { buffer } => (" New playlist name ", buffer.as_str()),
+            PlaylistInputMode::Renaming { buffer, .. } => (" Rename playlist ", buffer.as_str()),
+            _ => unreachable!(),
+        };
+        let input_block = Block::default()
+            .title(label)
+            .title_style(Style::default().fg(accent).add_modifier(Modifier::BOLD))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Plain)
+            .border_style(Style::default().fg(accent))
+            .style(Style::default().bg(theme.background));
+        let input_line = Line::from(vec![
+            Span::styled(buffer, Style::default().fg(theme.foreground)),
+            Span::styled("_", Style::default().fg(accent)),
+        ]);
+        frame.render_widget(Paragraph::new(input_line).block(input_block), input_rect);
+    }
 }
 
 // ── Right column ──────────────────────────────────────────────────────────────
@@ -240,4 +284,95 @@ fn render_track_list(
     let mut state = ListState::default();
     state.select(sel);
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+// ── Confirm dialog ────────────────────────────────────────────────────────────
+
+fn render_confirm_dialog(
+    frame: &mut Frame,
+    parent: Rect,
+    message: &str,
+    accent: Color,
+    theme: &Theme,
+) {
+    let w = (message.len() as u16 + 2).min(parent.width);
+    let h = 3u16;
+    let x = parent.x + (parent.width.saturating_sub(w)) / 2;
+    let y = parent.y + (parent.height.saturating_sub(h)) / 2;
+    let dialog_area = Rect { x, y, width: w, height: h };
+
+    frame.render_widget(Clear, dialog_area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Plain)
+        .border_style(Style::default().fg(accent))
+        .style(Style::default().bg(theme.background));
+    let para = Paragraph::new(Line::from(Span::styled(
+        message,
+        Style::default().fg(theme.foreground),
+    )))
+    .block(block);
+    frame.render_widget(para, dialog_area);
+}
+
+// ── Playlist picker popup ─────────────────────────────────────────────────────
+
+/// Render the floating playlist-picker popup (opened via `BrowserAddToPlaylist`).
+pub fn render_playlist_picker(
+    frame: &mut Frame,
+    area: Rect,
+    picker: &PlaylistPicker,
+    accent: Color,
+    theme: &Theme,
+) {
+    let w = (area.width / 2).max(30).min(area.width);
+    let h = (area.height * 6 / 10).max(5).min(area.height);
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let picker_area = Rect { x, y, width: w, height: h };
+
+    frame.render_widget(Clear, picker_area);
+
+    let (items, sel): (Vec<ListItem>, Option<usize>) = if picker.loading {
+        (
+            vec![ListItem::new("Loading…").style(Style::default().fg(theme.dimmed))],
+            None,
+        )
+    } else if picker.playlists.is_empty() {
+        (
+            vec![ListItem::new("No playlists").style(Style::default().fg(theme.dimmed))],
+            None,
+        )
+    } else {
+        let items = picker
+            .playlists
+            .iter()
+            .map(|p| ListItem::new(p.name.clone()).style(Style::default().fg(theme.foreground)))
+            .collect();
+        let sel = Some(picker.selected_index.min(picker.playlists.len() - 1));
+        (items, sel)
+    };
+
+    let block = Block::default()
+        .title(" Add to playlist  Enter: add  Esc: cancel ")
+        .title_style(Style::default().fg(accent).add_modifier(Modifier::BOLD))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Plain)
+        .border_style(Style::default().fg(accent))
+        .style(Style::default().bg(theme.background));
+
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(
+            Style::default()
+                .bg(accent)
+                .fg(theme.background)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▶ ")
+        .style(Style::default().bg(theme.background));
+
+    let mut state = ListState::default();
+    state.select(sel);
+    frame.render_stateful_widget(list, picker_area, &mut state);
 }

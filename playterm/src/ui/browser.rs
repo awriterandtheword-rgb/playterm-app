@@ -23,4 +23,8 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         app.accent(),
         &app.theme,
     );
+
+    if let Some(picker) = &app.playlist_picker {
+        playlist_overlay::render_playlist_picker(frame, area, picker, app.accent(), &app.theme);
+    }
 }

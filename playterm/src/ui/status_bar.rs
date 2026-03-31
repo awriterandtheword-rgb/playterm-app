@@ -25,6 +25,13 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
             Span::raw(" "),
             Span::styled("Cancel", Style::default().fg(app.accent())),
         ])
+    } else if let Some((msg, _)) = &app.status_flash {
+        // Flash message: show centred, accent coloured.
+        let gap = (area.width as usize).saturating_sub(msg.len()) / 2;
+        Line::from(vec![
+            Span::raw(" ".repeat(gap)),
+            Span::styled(msg.clone(), Style::default().fg(app.accent())),
+        ])
     } else {
         let host = app.config.subsonic_url
             .trim_start_matches("http://")
