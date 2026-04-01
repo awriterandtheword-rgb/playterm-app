@@ -26,9 +26,21 @@ Streams from [Navidrome](https://www.navidrome.org/), [Subsonic](https://www.sub
 
 ## Screenshots
 
-> _Coming soon._
-
----
+<p align="center">
+  <img src="docs/screenshots/Now Playing.png" width="49%" />
+  <img src="docs/screenshots/Home.png" width="49%" />
+</p>
+<p align="center">
+  <img src="docs/screenshots/Browse.png" width="49%" />
+  <img src="docs/screenshots/Lyrics.png" width="49%" />
+</p>
+<p align="center">
+  <img src="docs/screenshots/Visualizer.png" width="49%" />
+  <img src="docs/screenshots/Playlists.png" width="49%" />
+</p>
+<p align="center">
+  <img src="docs/screenshots/Info.png" width="49%" />
+</p>
 
 ## Requirements
 
