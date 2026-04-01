@@ -29,7 +29,7 @@ use crate::models::{
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 /// Default Navidrome server used when no URL is supplied.
-pub const DEFAULT_SERVER_URL: &str = "http://192.168.68.122:4533";
+pub const DEFAULT_SERVER_URL: &str = "http://localhost:4533";
 
 const API_VERSION: &str = "1.16.1";
 const CLIENT_NAME: &str = "playterm";
@@ -90,7 +90,7 @@ pub struct SubsonicClient {
 impl SubsonicClient {
     /// Create a new client.
     ///
-    /// `base_url` should be the server root, e.g. `"http://192.168.68.122:4533"`.
+    /// `base_url` should be the server root, e.g. `"http://localhost:4533"`.
     /// Trailing slashes are stripped automatically.
     pub fn new(base_url: &str, username: &str, password: &str) -> Result<Self> {
         let http = ClientBuilder::new()
@@ -491,15 +491,9 @@ mod tests {
     ///   cargo test -p playterm-subsonic -- --nocapture
     /// ```
     fn test_client() -> SubsonicClient {
-        let url = std::env::var("SUBSONIC_URL")
-            .or_else(|_| std::env::var("TERMUSIC_SUBSONIC_URL"))
-            .unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
-        let user = std::env::var("SUBSONIC_USER")
-            .or_else(|_| std::env::var("TERMUSIC_SUBSONIC_USER"))
-            .unwrap_or_else(|_| "admin".to_string());
-        let pass = std::env::var("SUBSONIC_PASS")
-            .or_else(|_| std::env::var("TERMUSIC_SUBSONIC_PASS"))
-            .unwrap_or_else(|_| "REDACTED".to_string());
+        let url  = std::env::var("SUBSONIC_URL").expect("set SUBSONIC_URL to run integration tests");
+        let user = std::env::var("SUBSONIC_USER").expect("set SUBSONIC_USER to run integration tests");
+        let pass = std::env::var("SUBSONIC_PASS").expect("set SUBSONIC_PASS to run integration tests");
         SubsonicClient::new(&url, &user, &pass).expect("client construction must not fail")
     }
 
