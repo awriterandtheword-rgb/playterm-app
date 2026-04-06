@@ -4,6 +4,9 @@
 //! a JSON index at `~/.cache/playterm/cache.json`. LRU eviction removes the
 //! least-recently-played entries when the configured size limit is exceeded.
 //!
+//! Cache hits are read directly by the audio engine from disk.
+//! Writes use a temp file + rename so the index never points at a half-written file.
+//!
 //! All IO errors are soft-failed — the cache never crashes or interrupts playback.
 
 use std::collections::HashMap;
@@ -144,8 +147,23 @@ impl TrackCache {
         if !self.enabled { return Ok(()); }
 
         let path = self.tracks_dir.join(format!("{song_id}.cache"));
-        if let Err(e) = std::fs::write(&path, data) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let temp = self
+            .tracks_dir
+            .join(format!("{song_id}.cache.{nanos}.part"));
+        if let Err(e) = std::fs::write(&temp, data) {
             eprintln!("warn: cache write failed for {song_id}: {e}");
+            return Ok(());
+        }
+        // Replace existing file atomically where the platform allows it, so readers
+        // never see a truncated file while a download completes.
+        let _ = std::fs::remove_file(&path);
+        if let Err(e) = std::fs::rename(&temp, &path) {
+            eprintln!("warn: cache finalize failed for {song_id}: {e}");
+            let _ = std::fs::remove_file(&temp);
             return Ok(());
         }
 
@@ -204,40 +222,4 @@ impl TrackCache {
             let _ = std::fs::write(&self.index_path, json);
         }
     }
-}
-
-// ── Local loopback server for cache-hit playback ──────────────────────────────
-
-/// Bind a loopback TCP server, spawn a one-shot `spawn_blocking` task that
-/// serves the cached file bytes with HTTP/1.1 headers, and return the URL.
-///
-/// The player thread's `reqwest::blocking::get` connects and reads the file
-/// over loopback — essentially as fast as reading from disk directly.
-///
-/// Falls back gracefully: on any bind/accept/read error the task simply exits,
-/// and the player will receive an empty response (which it handles as an error).
-pub fn serve_from_cache(path: PathBuf) -> anyhow::Result<String> {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let port = listener.local_addr()?.port();
-
-    tokio::task::spawn_blocking(move || {
-        use std::io::Write as _;
-        if let Ok((mut stream, _)) = listener.accept() {
-            if let Ok(bytes) = std::fs::read(&path) {
-                let header = format!(
-                    "HTTP/1.1 200 OK\r\n\
-                     Content-Type: application/octet-stream\r\n\
-                     Content-Length: {}\r\n\
-                     Connection: close\r\n\
-                     \r\n",
-                    bytes.len()
-                );
-                let _ = stream.write_all(header.as_bytes());
-                let _ = stream.write_all(&bytes);
-                let _ = stream.flush();
-            }
-        }
-    });
-
-    Ok(format!("http://127.0.0.1:{port}/"))
 }

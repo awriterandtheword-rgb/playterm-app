@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::{Arc, mpsc as std_mpsc};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -50,6 +51,9 @@ fn humanize_playback_error(message: &str) -> String {
     if lower.contains("reading stream body") {
         return "Playback failed: stream interrupted (retry)".to_string();
     }
+    if lower.contains("reading cached track") {
+        return "Playback failed: offline cache unreadable (try disabling cache)".to_string();
+    }
     let one_line: String = raw
         .lines()
         .next()
@@ -66,6 +70,12 @@ fn humanize_playback_error(message: &str) -> String {
     } else {
         one_line
     }
+}
+
+/// Subsonic stream URL vs on-disk offline cache (see [`App::resolve_playback`]).
+enum ResolvedPlayback {
+    Url(String),
+    Cached(PathBuf),
 }
 
 /// Approximate number of visible album thumbnails given cell pixel dimensions.
@@ -318,7 +328,7 @@ pub struct App {
     pub keybinds: Keybinds,
     /// Resolved theme colours (parsed from config.toml [theme]).
     pub theme: Theme,
-    /// Monotonically increasing counter sent with every `PlayerCommand::PlayUrl`.
+    /// Monotonically increasing counter sent with every play command (`PlayUrl` / `PlayCached`).
     /// The engine uses it to discard stale downloads from rapid skips.
     play_gen: u64,
 
@@ -1099,12 +1109,20 @@ impl App {
             PlayerEvent::AboutToFinish => {
                 // Pre-load the next track for gapless playback.
                 if let Some(next) = self.queue.peek_next().cloned() {
-                    let url = self.subsonic.stream_url(&next.id, self.config.max_bit_rate);
                     let duration =
                         next.duration.map(|s| std::time::Duration::from_secs(u64::from(s)));
-                    let _ = self
-                        .player_tx
-                        .send(PlayerCommand::EnqueueNext { url, duration });
+                    match self.resolve_playback(&next) {
+                        ResolvedPlayback::Cached(path) => {
+                            let _ = self
+                                .player_tx
+                                .send(PlayerCommand::EnqueueNextCached { path, duration });
+                        }
+                        ResolvedPlayback::Url(url) => {
+                            let _ = self
+                                .player_tx
+                                .send(PlayerCommand::EnqueueNext { url, duration });
+                        }
+                    }
                 }
             }
             PlayerEvent::TrackAdvanced => {
@@ -1338,30 +1356,31 @@ impl App {
             self.play_gen += 1;
             // Advance the prefetch gen so stale background downloads are discarded.
             self.prefetch_gen.fetch_add(1, Ordering::Release);
-            let url = self.resolve_stream_url(&song);
             let duration = song.duration.map(|s| std::time::Duration::from_secs(u64::from(s)));
+            let resolved = self.resolve_playback(&song);
             self.playback.current_song = Some(song);
             self.playback.player_loaded = true;
-            let _ = self.player_tx.send(PlayerCommand::PlayUrl { url, duration, gen: self.play_gen });
-        }
-    }
-
-    /// Return the URL to play for `song`.
-    ///
-    /// If the track is in the offline cache, starts a loopback HTTP server that
-    /// serves the cached bytes and returns `http://127.0.0.1:{port}/`.
-    /// Falls back to the Subsonic stream URL on any error or cache miss.
-    fn resolve_stream_url(&mut self, song: &playterm_subsonic::Song) -> String {
-        if self.config.cache_enabled {
-            if let Some(path) = self.cache.get(&song.id) {
-                self.cache.touch(&song.id);
-                match crate::cache::serve_from_cache(path) {
-                    Ok(local_url) => return local_url,
-                    Err(e) => eprintln!("warn: could not serve from cache: {e}"),
+            let gen = self.play_gen;
+            match resolved {
+                ResolvedPlayback::Cached(path) => {
+                    let _ = self.player_tx.send(PlayerCommand::PlayCached { path, duration, gen });
+                }
+                ResolvedPlayback::Url(url) => {
+                    let _ = self.player_tx.send(PlayerCommand::PlayUrl { url, duration, gen });
                 }
             }
         }
-        self.subsonic.stream_url(&song.id, self.config.max_bit_rate)
+    }
+
+    /// Resolve a Subsonic stream URL or a finished on-disk cache file for `song`.
+    fn resolve_playback(&mut self, song: &playterm_subsonic::Song) -> ResolvedPlayback {
+        if self.config.cache_enabled {
+            if let Some(path) = self.cache.get(&song.id) {
+                self.cache.touch(&song.id);
+                return ResolvedPlayback::Cached(path);
+            }
+        }
+        ResolvedPlayback::Url(self.subsonic.stream_url(&song.id, self.config.max_bit_rate))
     }
 
     /// Spawn a background task to download `song_id` for caching.
@@ -2035,13 +2054,12 @@ impl App {
             }
             HomeSection::RecentTracks => {
                 let idx = self.home.selected_index;
-                if let Some(record) = self.home.recent_tracks.get(idx) {
+                if let Some(record) = self.home.recent_tracks.get(idx).cloned() {
                     // We have a PlayRecord but need a Song. Find it in the queue or
                     // create a minimal Song so we can play it.  The simplest
-                    // approach: construct the stream URL directly and push a
-                    // synthetic Song into the queue.
+                    // approach: push a synthetic Song into the queue, then resolve
+                    // the stream URL (cache-aware, properly encoded query params).
                     let song_id = record.song_id.clone();
-                    let url = self.subsonic.stream_url(&song_id, self.config.max_bit_rate);
                     // Build a minimal Song for queue display.
                     let song = playterm_subsonic::Song {
                         id: song_id,
@@ -2078,9 +2096,31 @@ impl App {
                     } else {
                         None
                     };
+                    let sid = record.song_id.clone();
+                    let resolved = match self.queue.current().cloned() {
+                        Some(s) => self.resolve_playback(&s),
+                        None => ResolvedPlayback::Url(
+                            self.subsonic.stream_url(&sid, self.config.max_bit_rate),
+                        ),
+                    };
                     self.playback.player_loaded = true;
                     let gen = self.play_gen;
-                    let _ = self.player_tx.send(playterm_player::PlayerCommand::PlayUrl { url, duration: dur, gen });
+                    match resolved {
+                        ResolvedPlayback::Cached(path) => {
+                            let _ = self.player_tx.send(playterm_player::PlayerCommand::PlayCached {
+                                path,
+                                duration: dur,
+                                gen,
+                            });
+                        }
+                        ResolvedPlayback::Url(url) => {
+                            let _ = self.player_tx.send(playterm_player::PlayerCommand::PlayUrl {
+                                url,
+                                duration: dur,
+                                gen,
+                            });
+                        }
+                    }
                 }
             }
             HomeSection::TopArtists => {
