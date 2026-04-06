@@ -333,42 +333,26 @@ async fn run_loop(
         }
         last_tab = app.active_tab;
 
-        // Wait for poll timeout or art-recovery tick — whichever comes first.
-        // During visualizer or colour transitions run at 33 ms (~30 fps);
-        // otherwise 50 ms keeps the progress bar responsive.
-        let poll_ms = if app.visualizer_visible || app.accent_transition_active() { 33 } else { 50 };
-        tokio::select! {
-            _ = tokio::time::sleep(Duration::from_millis(poll_ms)) => {}
-            _ = art_recovery.tick() => {
-                // Tick fired: if art is missing and should be shown, nudge the
-                // render block by clearing last_rendered_art.  The full re-encode
-                // runs at the top of the next iteration — no duplicate render logic.
-                if app.kitty_supported
-                    && !art_displayed
-                    && app.art_cache.is_some()
-                    && app.active_tab == app::Tab::NowPlaying
-                    && !app.help_visible
-                {
-                    last_rendered_art = None;
-                }
-            }
-        }
-
-        // Non-blocking drain: process any crossterm event that arrived during the sleep.
-        match event::poll(Duration::from_millis(0)) {
-            // stdin closed / pty destroyed (e.g. tmux pane killed) — quit cleanly.
+        // Block until the frame interval elapses *or* input is ready.  Previously we
+        // slept first and only then polled stdin, which added a full period (50 ms)
+        // of latency to every keypress.
+        let poll_ms = if app.visualizer_visible || app.accent_transition_active() {
+            33
+        } else {
+            50
+        };
+        match event::poll(Duration::from_millis(poll_ms)) {
             Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe
-                   || e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                || e.kind() == std::io::ErrorKind::UnexpectedEof => {
                 app.should_quit = true;
             }
             Err(e) => return Err(e.into()),
             Ok(false) => {}
-            Ok(true) => {
+            Ok(true) => loop {
                 let read_result = event::read();
                 match read_result {
-                    // Same stdin-closed handling for the read side.
                     Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe
-                           || e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                        || e.kind() == std::io::ErrorKind::UnexpectedEof => {
                         app.should_quit = true;
                     }
                     Err(e) => return Err(e.into()),
@@ -478,8 +462,40 @@ async fn run_loop(
                 _ => {}
                     } // end Ok(ev) match
                 }     // end read_result match
-            }         // end Ok(true)
-        }             // end poll_result match
+
+                if app.should_quit {
+                    break;
+                }
+
+                match event::poll(Duration::ZERO) {
+                    Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe
+                        || e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                        app.should_quit = true;
+                        break;
+                    }
+                    Err(e) => return Err(e.into()),
+                    Ok(false) => break,
+                    Ok(true) => {}
+                }
+            },
+        }
+
+        if last_art_recovery_fire.elapsed() >= Duration::from_secs(2) {
+            last_art_recovery_fire = Instant::now();
+            let latched_bad = match (&app.art_cache, &kitty_cover_unrenderable) {
+                (Some((cid, _)), Some(bad)) if bad == cid => true,
+                _ => false,
+            };
+            if app.kitty_supported
+                && !art_displayed
+                && app.art_cache.is_some()
+                && app.active_tab == app::Tab::NowPlaying
+                && !app.help_visible
+                && !latched_bad
+            {
+                last_rendered_art = None;
+            }
+        }
 
         // Drain once more so any triggered playback reflects on next frame.
         while let Ok(event) = app.player_rx.try_recv() {
@@ -1083,14 +1099,11 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
             }
         }
         Tab::NowPlaying => {
-            // NowPlaying center: [50% art | 50% queue]
-            let np_center = Layout::horizontal([
-                Constraint::Percentage(50),
-                Constraint::Percentage(50),
-            ])
-            .split(center);
-
-            let queue_area = np_center[1];
+            let queue_area = ui::layout::now_playing_queue_widget_rect(
+                center,
+                app.lyrics_visible,
+                app.visualizer_visible,
+            );
             if x < queue_area.x || x >= queue_area.x + queue_area.width {
                 return;
             }

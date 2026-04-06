@@ -102,6 +102,7 @@ impl QueueState {
     pub fn next(&mut self) -> bool {
         if self.cursor + 1 < self.songs.len() {
             self.cursor += 1;
+            self.scroll = self.cursor;
             true
         } else {
             false
@@ -117,6 +118,7 @@ impl QueueState {
     pub fn prev(&mut self) -> bool {
         if self.cursor > 0 {
             self.cursor -= 1;
+            self.scroll = self.cursor;
             true
         } else {
             false

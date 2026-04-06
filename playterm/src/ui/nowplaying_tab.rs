@@ -10,13 +10,9 @@ use super::visualizer::render_visualizer;
 use crate::app::App;
 
 pub fn render(app: &App, frame: &mut Frame, area: Rect) {
-    let cols = Layout::horizontal([
-        Constraint::Percentage(50),
-        Constraint::Percentage(50),
-    ])
-    .split(area);
+    let (art_col, queue_col) = super::layout::now_playing_split_center(area);
 
-    render_art_placeholder(app, frame, cols[0]);
+    render_art_placeholder(app, frame, art_col);
 
     if app.visualizer_visible {
         // Split the queue column: top 75% = queue, bottom 25% = visualizer pane.
@@ -24,7 +20,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
             Constraint::Percentage(75),
             Constraint::Percentage(25),
         ])
-        .split(cols[1]);
+        .split(queue_col);
         queue::render(app, frame, rows[0], true);
         render_visualizer_pane(app, frame, rows[1]);
     } else if app.lyrics_visible {
@@ -33,11 +29,11 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
             Constraint::Percentage(75),
             Constraint::Percentage(25),
         ])
-        .split(cols[1]);
+        .split(queue_col);
         queue::render(app, frame, rows[0], true);
         render_lyrics_pane(app, frame, rows[1]);
     } else {
-        queue::render(app, frame, cols[1], true);
+        queue::render(app, frame, queue_col, true);
     }
 }
 

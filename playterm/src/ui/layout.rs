@@ -50,6 +50,40 @@ pub fn build_nowplaying(area: Rect) -> NowPlayingAreas {
     }
 }
 
+/// Split the Now Playing tab center into `[album art | queue column]` (50/50).
+pub fn now_playing_split_center(center: Rect) -> (Rect, Rect) {
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(50),
+            Constraint::Percentage(50),
+        ])
+        .split(center);
+    (cols[0], cols[1])
+}
+
+/// Queue widget area: matches `nowplaying_tab::render` (full right column, or top
+/// 75% when lyrics / visualizer share that column).
+pub fn now_playing_queue_widget_rect(
+    center: Rect,
+    lyrics_visible: bool,
+    visualizer_visible: bool,
+) -> Rect {
+    let (_, queue_col) = now_playing_split_center(center);
+    if lyrics_visible || visualizer_visible {
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(75),
+                Constraint::Percentage(25),
+            ])
+            .split(queue_col);
+        rows[0]
+    } else {
+        queue_col
+    }
+}
+
 /// Return the album-art widget rect given the full terminal size.
 ///
 /// Replicates the NowPlaying layout calculation so that `main.rs` can compute

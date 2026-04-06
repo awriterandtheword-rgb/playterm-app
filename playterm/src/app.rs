@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, mpsc as std_mpsc};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use ratatui::style::Color;
@@ -22,6 +22,51 @@ use crate::theme::Theme;
 use playterm_subsonic::LyricLine;
 
 // ── Sizing helper (used in dispatch for scroll clamping) ──────────────────────
+
+/// Map raw engine/network errors to a short status-bar line (no multiline chains).
+fn humanize_playback_error(message: &str) -> String {
+    let raw = message
+        .strip_prefix("playback error: ")
+        .or_else(|| message.strip_prefix("enqueue error: "))
+        .unwrap_or(message);
+    let lower = raw.to_lowercase();
+    if lower.contains("decoding response body") || lower.contains("error decoding") {
+        return "Playback failed: stream interrupted or invalid (retry)".to_string();
+    }
+    if lower.contains("stream http") || lower.contains("http 4") || lower.contains("http 5") {
+        return "Playback failed: server error or denied".to_string();
+    }
+    if lower.contains("connecting to stream")
+        || lower.contains("connection refused")
+        || lower.contains("error sending request")
+        || lower.contains("timeout")
+        || lower.contains("dns")
+    {
+        return "Playback failed: network error".to_string();
+    }
+    if lower.contains("enqueue error") {
+        return "Next track: download failed".to_string();
+    }
+    if lower.contains("reading stream body") {
+        return "Playback failed: stream interrupted (retry)".to_string();
+    }
+    let one_line: String = raw
+        .lines()
+        .next()
+        .unwrap_or(raw)
+        .trim()
+        .chars()
+        .take(70)
+        .collect();
+    if one_line.is_empty() {
+        return "Playback failed".to_string();
+    }
+    if one_line.chars().count() == 70 {
+        format!("{one_line}…")
+    } else {
+        one_line
+    }
+}
 
 /// Approximate number of visible album thumbnails given cell pixel dimensions.
 /// Assumes the strip is ~80 columns wide (fallback when terminal size unavailable).
@@ -329,8 +374,9 @@ pub struct App {
     pub playlist_overlay: PlaylistOverlay,
     /// Floating picker for "add track to playlist" (None when not open).
     pub playlist_picker: Option<PlaylistPicker>,
-    /// Transient status message shown in the status bar; expires after ~3 s.
-    pub status_flash: Option<(String, std::time::Instant)>,
+    /// Transient status message shown in the status bar. Second element is when
+    /// the message should be cleared (`Instant::now() >= deadline`).
+    pub status_flash: Option<(String, Instant)>,
 
     // ── Play history (Phase 6.1) ──────────────────────────────────────────────
     /// Persistent play history (loaded on startup, saved on quit).
@@ -638,12 +684,15 @@ impl App {
         });
     }
 
-    /// Return `true` when every line in the current lyrics cache has no timestamp
-    /// (i.e. lyrics are plain-text and must be scrolled manually).
+    /// Return `true` when lyrics are plain-text (no timestamps) and should scroll
+    /// with j/k. Empty lines count as *not* unsynced so j/k still moves the queue
+    /// when the lyrics pane is open but has nothing to scroll.
     pub fn lyrics_are_unsynced(&self) -> bool {
         self.lyrics_cache
             .as_ref()
-            .map(|(_, lines)| lines.iter().all(|l| l.time.is_none()))
+            .map(|(_, lines)| {
+                !lines.is_empty() && lines.iter().all(|l| l.time.is_none())
+            })
             .unwrap_or(false)
     }
 
@@ -822,6 +871,7 @@ impl App {
                 }
                 if start_playing && was_empty && !self.queue.songs.is_empty() {
                     self.queue.cursor = 0;
+                    self.queue.scroll = 0;
                     self.play_current();
                 }
             }
@@ -911,7 +961,7 @@ impl App {
             LibraryUpdate::PlaylistTrackAdded { playlist_name, .. } => {
                 self.status_flash = Some((
                     format!("Added to {}", playlist_name),
-                    std::time::Instant::now(),
+                    Instant::now() + Duration::from_secs(2),
                 ));
             }
             LibraryUpdate::PlaylistTrackRemoved { _playlist_id: _, index } => {
@@ -1092,6 +1142,7 @@ impl App {
                 } else if !self.queue.songs.is_empty() {
                     // End of queue — loop back to the first track.
                     self.queue.cursor = 0;
+                    self.queue.scroll = 0;
                     self.play_current();
                 } else {
                     self.playback.current_song = None;
@@ -1099,7 +1150,12 @@ impl App {
                 }
             }
             PlayerEvent::Error(e) => {
-                eprintln!("player error: {e}");
+                // Never eprintln here — stderr draws over the alternate-screen TUI.
+                self.playback.player_loaded = false;
+                self.status_flash = Some((
+                    humanize_playback_error(&e),
+                    Instant::now() + Duration::from_secs(10),
+                ));
             }
         }
     }
@@ -1776,7 +1832,12 @@ impl App {
                 // Enter on Tracks: add the highlighted track to the queue
                 BrowserColumn::Tracks => self.handle_add_to_queue(),
             },
-            Tab::NowPlaying => {} // nothing to select in queue view
+            Tab::NowPlaying => {
+                // Enter: jump playback to the highlighted queue row.
+                if !self.queue.songs.is_empty() {
+                    self.play_current();
+                }
+            }
         }
     }
 
@@ -2106,8 +2167,8 @@ impl App {
 
     /// Clear an expired status flash (call once per frame in the main loop).
     pub fn tick_status_flash(&mut self) {
-        if let Some((_, instant)) = &self.status_flash {
-            if instant.elapsed() >= std::time::Duration::from_secs(2) {
+        if let Some((_, deadline)) = &self.status_flash {
+            if Instant::now() >= *deadline {
                 self.status_flash = None;
             }
         }
@@ -2215,12 +2276,14 @@ impl App {
                     let songs = songs.clone();
                     self.queue.songs.clear();
                     self.queue.cursor = 0;
+                    self.queue.scroll = 0;
                     self.queue.pre_shuffle_order = None;
                     for song in songs {
                         self.queue.push(song);
                     }
                     if !self.queue.songs.is_empty() {
                         self.queue.cursor = 0;
+                        self.queue.scroll = 0;
                         self.play_current();
                     }
                 }
@@ -2234,6 +2297,7 @@ impl App {
                     }
                     if was_empty && !self.queue.songs.is_empty() {
                         self.queue.cursor = 0;
+                        self.queue.scroll = 0;
                         self.play_current();
                     }
                 }
@@ -2246,9 +2310,11 @@ impl App {
                     {
                         self.queue.songs.clear();
                         self.queue.cursor = 0;
+                        self.queue.scroll = 0;
                         self.queue.pre_shuffle_order = None;
                         self.queue.push(song);
                         self.queue.cursor = 0;
+                        self.queue.scroll = 0;
                         self.play_current();
                     }
                 }
@@ -2263,6 +2329,7 @@ impl App {
                         self.queue.push(song);
                         if was_empty {
                             self.queue.cursor = 0;
+                            self.queue.scroll = 0;
                             self.play_current();
                         }
                     }
