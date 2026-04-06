@@ -16,7 +16,7 @@ use std::io;
 use std::process;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{
@@ -175,13 +175,14 @@ async fn run_loop(
     // redisplay it instantly with `a=p,i=1` when switching back.
     let mut last_rendered_art: Option<(String, Rect)> = None;
     let mut art_displayed = false;
+    // Cover id for which `render_image` failed (e.g. undecodable bytes). Without
+    // this latch the loop retries every frame and spams stderr.
+    let mut kitty_cover_unrenderable: Option<String> = None;
     let mut last_tab = app.active_tab;
 
-    // 2-second fallback timer: re-render album art when it is missing.
-    // Fires every 2 s; the render block only acts when art_displayed is false,
-    // so it is a no-op during normal playback (no flicker).
-    let mut art_recovery = tokio::time::interval(Duration::from_secs(2));
-    art_recovery.tick().await; // consume the initial immediate tick
+    // 2-second fallback: nudge Kitty art re-transmit when it is missing.
+    // Checked once per loop iteration (see below).
+    let mut last_art_recovery_fire = Instant::now();
 
     loop {
         // Check for SIGTERM / SIGHUP from the signal handler task.
@@ -212,6 +213,14 @@ async fn run_loop(
         // ── Kitty album art (rendered after ratatui so it sits above text) ──────
         if app.kitty_supported {
             if app.active_tab == app::Tab::NowPlaying {
+                // New cover id → drop any "unrenderable" latch from a previous track.
+                match (&app.art_cache, &kitty_cover_unrenderable) {
+                    (Some((cid, _)), Some(bad)) if bad != cid => {
+                        kitty_cover_unrenderable = None;
+                    }
+                    _ => {}
+                }
+
                 // On every entry to NowPlaying (including initial load) drop any
                 // cached render state so the art is fully re-transmitted this frame.
                 // The fast display_image() path (a=p,i=1) can silently fail if the
@@ -231,22 +240,41 @@ async fn run_loop(
                 } else if let Some((cover_id, bytes)) = &app.art_cache {
                     let sz = terminal.size()?;
                     let art_rect = ui::layout::art_rect(Rect::new(0, 0, sz.width, sz.height));
-                    let stored_matches = last_rendered_art
-                        .as_ref()
-                        .map(|(id, r)| id == cover_id && r == &art_rect)
-                        .unwrap_or(false);
 
-                    if stored_matches && art_displayed {
-                        // Image is already visible — nothing to do.
+                    if kitty_cover_unrenderable.as_deref() == Some(cover_id.as_str()) {
+                        if art_displayed {
+                            let _ = ui::kitty_art::clear_image(app.in_tmux);
+                            art_displayed = false;
+                        }
                     } else {
-                        // Album changed, first display, tab return, or terminal
-                        // was resized — full re-encode and re-transmit.
-                        match ui::kitty_art::render_image(bytes, art_rect, app.in_tmux, app.tmux_status_offset) {
-                            Ok(()) => {
-                                last_rendered_art = Some((cover_id.clone(), art_rect));
-                                art_displayed = true;
+                        let stored_matches = last_rendered_art
+                            .as_ref()
+                            .map(|(id, r)| id == cover_id && r == &art_rect)
+                            .unwrap_or(false);
+
+                        if stored_matches && art_displayed {
+                            // Image is already visible — nothing to do.
+                        } else {
+                            // Album changed, first display, tab return, or terminal
+                            // was resized — full re-encode and re-transmit.
+                            match ui::kitty_art::render_image(
+                                bytes,
+                                art_rect,
+                                app.in_tmux,
+                                app.tmux_status_offset,
+                            ) {
+                                Ok(()) => {
+                                    last_rendered_art = Some((cover_id.clone(), art_rect));
+                                    art_displayed = true;
+                                }
+                                Err(e) => {
+                                    eprintln!("kitty render: {e}");
+                                    let _ = ui::kitty_art::clear_image(app.in_tmux);
+                                    kitty_cover_unrenderable = Some(cover_id.clone());
+                                    last_rendered_art = None;
+                                    art_displayed = false;
+                                }
                             }
-                            Err(e) => eprintln!("kitty render: {e}"),
                         }
                     }
                 } else if art_displayed {
