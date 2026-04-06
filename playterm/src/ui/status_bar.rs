@@ -26,12 +26,14 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
             Span::styled("Cancel", Style::default().fg(app.accent())),
         ])
     } else if let Some((msg, _)) = &app.status_flash {
-        // Flash message: show centred, accent coloured.
-        let gap = (area.width as usize).saturating_sub(msg.len()) / 2;
-        Line::from(vec![
-            Span::raw(" ".repeat(gap)),
-            Span::styled(msg.clone(), Style::default().fg(app.accent())),
-        ])
+        // Flash message: left-aligned, truncated to the bar width (centred long
+        // strings overflow and corrupt the TUI layout).
+        let w = area.width as usize;
+        let shown = fit_status_bar_text(msg, w);
+        Line::from(vec![Span::styled(
+            shown,
+            Style::default().fg(app.accent()),
+        )])
     } else {
         let host = app.config.subsonic_url
             .trim_start_matches("http://")
@@ -51,4 +53,19 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
 
     let para = Paragraph::new(line).style(Style::default().bg(t.background));
     frame.render_widget(para, area);
+}
+
+/// Truncate `s` to at most `max_cols` Unicode scalars (status bar is one row).
+fn fit_status_bar_text(s: &str, max_cols: usize) -> String {
+    if max_cols == 0 {
+        return String::new();
+    }
+    let n = s.chars().count();
+    if n <= max_cols {
+        return s.to_string();
+    }
+    if max_cols <= 1 {
+        return "…".to_string();
+    }
+    s.chars().take(max_cols - 1).collect::<String>() + "…"
 }
