@@ -270,14 +270,14 @@ impl SubsonicClient {
     pub async fn get_cover_art(&self, id: &str) -> Result<Vec<u8>> {
         let mut params = self.auth_params();
         params.push(("id", id.to_string()));
-        let bytes = self
+        let response = self
             .http
             .get(self.endpoint_url("getCoverArt"))
             .query(&params)
             .send()
             .await?
-            .bytes()
-            .await?;
+            .error_for_status()?;
+        let bytes = response.bytes().await?;
         Ok(bytes.to_vec())
     }
 
