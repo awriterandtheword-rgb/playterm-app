@@ -8,12 +8,12 @@ Ordered plan for major features. Earlier phases reduce rework in later ones.
 
 Expose playback through the standard D-Bus [MPRIS](https://specifications.freedesktop.org/mpris-spec/latest/) interface so desktop shells, widgets, and tools can see and control playterm.
 
-- [ ] Choose stack (e.g. `mpris-server`, `zbus`, or hand-rolled) and add Linux-only dependency gating if needed.
-- [ ] Implement `org.mpris.MediaPlayer2` (Raise, Quit, optional fullscreen) as appropriate for a TUI app.
-- [ ] Implement `org.mpris.MediaPlayer2.Player` with at least: `PlaybackStatus`, `Metadata` (title, artist, album, track id, length, art URL or local path if feasible), `Volume` if it maps cleanly to your engine.
-- [ ] Wire **Play / Pause / PlayPause / Stop / Next / Previous / Seek** to existing player commands.
-- [ ] Emit **PropertiesChanged** when track, state, or position should update (debounce if hot paths are noisy).
-- [ ] Document behavior and any gaps (e.g. no native window to “Raise”) in config or README.
+- [x] Choose stack (e.g. `mpris-server`, `zbus`, or hand-rolled) and add Linux-only dependency gating if needed.
+- [x] Implement `org.mpris.MediaPlayer2` (Raise, Quit, optional fullscreen) as appropriate for a TUI app.
+- [x] Implement `org.mpris.MediaPlayer2.Player` with at least: `PlaybackStatus`, `Metadata` (title, artist, album, track id, length, art URL or local path if feasible), `Volume` if it maps cleanly to your engine.
+- [x] Wire **Play / Pause / PlayPause / Stop / Next / Previous / Seek** to existing player commands.
+- [x] Emit **PropertiesChanged** when track, state, or position should update (debounce if hot paths are noisy).
+- [x] Document behavior and any gaps (e.g. no native window to “Raise”) in config or README.
 
 ---
 
@@ -51,6 +51,9 @@ Faster “add a whole album” / “add whole artist” flows on top of existing
 - [ ] From **artist** context: add all tracks (define order: album release date, then disc/track) or “all from this artist node” depending on API shape.
 - [ ] Optional: connect to **fzf** milestones (e.g. multi-select album or “all from artist” from picker).
 - [ ] Keybinds and/or menu actions; document in help overlay.
+- [ ] add 'replace' option for queue, not just add, maybe also a 'add at beginning' and 'add at end'
+- [ ] Fix album art no longer showing
+- [ ] Fix playing old queue causes network error (after closing and reopening)
 
 ---
 

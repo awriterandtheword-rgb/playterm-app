@@ -51,6 +51,11 @@ fn cache_base_dir() -> Option<PathBuf> {
         .map(|h| PathBuf::from(h).join(".cache").join("playterm"))
 }
 
+/// `~/.cache/playterm` (or `$XDG_CACHE_HOME/playterm`).
+pub fn playterm_cache_dir() -> Option<PathBuf> {
+    cache_base_dir()
+}
+
 fn unix_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::SystemTime::UNIX_EPOCH)

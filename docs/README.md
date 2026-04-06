@@ -21,6 +21,7 @@ Streams from [Navidrome](https://www.navidrome.org/), [Subsonic](https://www.sub
 - **Home tab** — recently played albums with art, recent tracks, and a "Rediscover" section surfacing artists you haven't listened to recently
 - **Play history** — recorded locally, persisted across sessions
 - **Search** — local filter across artists, albums, tracks, and queue
+- **MPRIS (Linux)** — session D-Bus `org.mpris.MediaPlayer2` so desktop shells, `playerctl`, and keyboard media keys can control playback
 - **Configurable keybinds and theme** — remap any key, override any color via `config.toml`
 - **Mouse support** — click to select browser items, seek on the progress bar, switch tabs
 - **Queue shuffle / unshuffle** — `s` to shuffle, `Z` to restore original order

@@ -1,6 +1,7 @@
 mod action;
 mod app;
 mod cache;
+mod mpris;
 mod color;
 mod config;
 mod history;
@@ -123,7 +124,23 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_loop(&mut terminal, &mut app, signal_quit).await;
+    #[cfg(target_os = "linux")]
+    let mpris_ctrl_rx = if let Some((link, rx)) = mpris::setup(app.config.mpris_enabled) {
+        app.mpris = Some(link);
+        app.mpris_sync_now();
+        Some(rx)
+    } else {
+        None
+    };
+    #[cfg(not(target_os = "linux"))]
+    let mpris_ctrl_rx: Option<std::sync::mpsc::Receiver<crate::mpris::MprisControl>> = None;
+
+    let result = run_loop(&mut terminal, &mut app, signal_quit, mpris_ctrl_rx).await;
+
+    #[cfg(target_os = "linux")]
+    if let Some(m) = app.mpris.take() {
+        m.shutdown();
+    }
 
     // Clear any Kitty images before leaving the alternate screen.
     if app.kitty_supported {
@@ -164,6 +181,7 @@ async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     signal_quit: Arc<AtomicBool>,
+    mpris_ctrl_rx: Option<std::sync::mpsc::Receiver<crate::mpris::MprisControl>>,
 ) -> Result<()> {
     // `last_rendered_art` — the (cover_id, rect) of the last full image
     // transmission.  Kept across tab switches so we can detect whether a
@@ -197,6 +215,12 @@ async fn run_loop(
         // Drain player events from the audio thread.
         while let Ok(event) = app.player_rx.try_recv() {
             app.handle_player_event(event);
+        }
+
+        if let Some(rx) = &mpris_ctrl_rx {
+            while let Ok(c) = rx.try_recv() {
+                app.handle_mpris_control(c);
+            }
         }
 
         // Advance colour transition before drawing.
@@ -500,6 +524,11 @@ async fn run_loop(
         // Drain once more so any triggered playback reflects on next frame.
         while let Ok(event) = app.player_rx.try_recv() {
             app.handle_player_event(event);
+        }
+        if let Some(rx) = &mpris_ctrl_rx {
+            while let Ok(c) = rx.try_recv() {
+                app.handle_mpris_control(c);
+            }
         }
 
         if app.should_quit {

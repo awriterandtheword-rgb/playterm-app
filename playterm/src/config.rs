@@ -121,15 +121,26 @@ struct PlayerSection {
     default_volume: u8,
     #[serde(default)]
     max_bit_rate: u32,
+    /// Register on the session D-Bus as an MPRIS player (Linux media keys, etc.).
+    #[serde(default = "default_mpris")]
+    mpris: bool,
 }
 
 impl Default for PlayerSection {
     fn default() -> Self {
-        Self { default_volume: default_volume(), max_bit_rate: 0 }
+        Self {
+            default_volume: default_volume(),
+            max_bit_rate: 0,
+            mpris: default_mpris(),
+        }
     }
 }
 
 fn default_volume() -> u8 { 70 }
+
+fn default_mpris() -> bool {
+    true
+}
 
 // ── Runtime config ────────────────────────────────────────────────────────────
 
@@ -140,6 +151,8 @@ pub struct Config {
     pub subsonic_pass:  String,
     pub default_volume: u8,
     pub max_bit_rate:   u32,
+    /// Linux: register MPRIS on the session bus (media keys, `playerctl`).
+    pub mpris_enabled:  bool,
     /// Raw keybind strings — parsed into `Keybinds` by `App::new`.
     pub keybinds: KeybindsSection,
     /// Raw theme colour strings — parsed into `Theme` by `App::new`.
@@ -187,6 +200,7 @@ impl Config {
             subsonic_pass:     file_cfg.server.password,
             default_volume:    file_cfg.player.default_volume,
             max_bit_rate:      file_cfg.player.max_bit_rate,
+            mpris_enabled:     file_cfg.player.mpris,
             keybinds:          file_cfg.keybinds,
             theme:             file_cfg.theme,
             lyrics_visible:    file_cfg.ui.lyrics,
@@ -223,6 +237,7 @@ password = ""
 [player]
 default_volume = 70
 max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
+# mpris = true     # Linux: register on session D-Bus for media keys / playerctl (default: true)
 
 [keybinds]
 # scroll_up     = "k"

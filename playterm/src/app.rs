@@ -398,6 +398,10 @@ pub struct App {
     accent_target: Color,
     /// When the current colour transition started. `None` = no active transition.
     pub accent_transition_start: Option<Instant>,
+
+    /// Linux: MPRIS D-Bus session registration and shared playback snapshot.
+    #[cfg(target_os = "linux")]
+    pub mpris: Option<crate::mpris::MprisLink>,
 }
 
 impl App {
@@ -464,6 +468,8 @@ impl App {
             accent_lerp_from: static_accent,
             accent_target: static_accent,
             accent_transition_start: None,
+            #[cfg(target_os = "linux")]
+            mpris: None,
         })
     }
 
@@ -880,6 +886,8 @@ impl App {
                 let accent = extract_accent(&bytes);
                 self.art_cache = Some((cover_id, bytes));
                 self.apply_dynamic_accent(accent);
+                #[cfg(target_os = "linux")]
+                self.mpris_emit_props();
             }
             LibraryUpdate::Lyrics { song_id, lines } => {
                 self.lyrics_loading = false;
@@ -987,6 +995,7 @@ impl App {
     // ── Player event ingestion ────────────────────────────────────────────────
 
     pub fn handle_player_event(&mut self, event: PlayerEvent) {
+        let progress_only = matches!(&event, PlayerEvent::Progress { .. });
         match event {
             PlayerEvent::TrackStarted => {
                 self.play_recorded = false;
@@ -1158,7 +1167,170 @@ impl App {
                 ));
             }
         }
+        #[cfg(target_os = "linux")]
+        {
+            if self.mpris.is_some() {
+                if progress_only {
+                    self.mpris_touch_snapshot_only();
+                    // Spec: `Position` must not emit PropertiesChanged on tick. Many shells
+                    // and widgets never poll `Get(Position)` and only resync on `Seeked` or
+                    // `PlaybackStatus` — emit `Seeked` on each progress update (~500 ms) so
+                    // the displayed time advances while playing.
+                    if let Some(link) = &self.mpris {
+                        link.notify_seeked(self.playback.elapsed);
+                    }
+                } else {
+                    self.mpris_emit_props();
+                }
+            }
+        }
     }
+
+    #[cfg(target_os = "linux")]
+    fn mpris_touch_snapshot_only(&mut self) {
+        if let Some(link) = &self.mpris {
+            crate::mpris::write_snapshot(self, &link.snapshot);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn mpris_emit_props(&mut self) {
+        if let Some(link) = &self.mpris {
+            crate::mpris::write_snapshot(self, &link.snapshot);
+            link.notify_refresh();
+        }
+    }
+
+    /// Push current playback state to MPRIS (call after registering the link).
+    #[cfg(target_os = "linux")]
+    pub fn mpris_sync_now(&mut self) {
+        self.mpris_emit_props();
+    }
+
+    #[cfg(target_os = "linux")]
+    fn mpris_emit_seek(&mut self, pos: std::time::Duration) {
+        if let Some(link) = &self.mpris {
+            crate::mpris::write_snapshot(self, &link.snapshot);
+            link.notify_seeked(pos);
+            link.notify_refresh();
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn mpris_after_action(&mut self, action: &Action) {
+        use crate::action::Action::*;
+        // Search dispatches per keystroke — skip D-Bus work for those.
+        if matches!(
+            action,
+            SearchStart | SearchInput(_) | SearchBackspace | SearchConfirm | SearchCancel
+        ) {
+            return;
+        }
+        let Some(link) = &self.mpris else {
+            return;
+        };
+        crate::mpris::write_snapshot(self, &link.snapshot);
+        match action {
+            SeekForward | SeekBackward | SeekTo(_) => {
+                link.notify_seeked(self.playback.elapsed);
+                link.notify_refresh();
+            }
+            _ => {
+                link.notify_refresh();
+            }
+        }
+    }
+
+    /// Handle D-Bus MPRIS remote control (Linux).
+    #[cfg(target_os = "linux")]
+    pub fn handle_mpris_control(&mut self, c: crate::mpris::MprisControl) {
+        use crate::mpris::MprisControl::*;
+        match c {
+            PlayPause => {
+                self.dispatch(Action::PlayPause);
+                return;
+            }
+            Next => {
+                self.dispatch(Action::NextTrack);
+                return;
+            }
+            Previous => {
+                self.dispatch(Action::PrevTrack);
+                return;
+            }
+            Pause => {
+                if self.playback.player_loaded && !self.playback.paused {
+                    self.playback.paused = true;
+                    let _ = self.player_tx.send(PlayerCommand::Pause);
+                }
+            }
+            Play => {
+                if !self.playback.player_loaded && self.queue.current().is_some() {
+                    self.play_current();
+                } else if self.playback.paused {
+                    self.playback.paused = false;
+                    let _ = self.player_tx.send(PlayerCommand::Resume);
+                }
+            }
+            Stop => {
+                let _ = self.player_tx.send(PlayerCommand::Stop);
+                self.playback.player_loaded = false;
+                self.playback.elapsed = std::time::Duration::ZERO;
+                self.playback.paused = false;
+            }
+            SeekDelta(dt_micros) => {
+                let cur = self.playback.elapsed.as_micros() as i128;
+                let target = cur + i128::from(dt_micros);
+                let clamped_low = target.max(0);
+                let max_micros = self
+                    .playback
+                    .total
+                    .map(|t| t.as_micros() as i128)
+                    .unwrap_or(clamped_low);
+                let final_micros = clamped_low.min(max_micros).max(0);
+                let new_pos = std::time::Duration::from_micros(final_micros as u64);
+                let _ = self.player_tx.send(PlayerCommand::Seek(new_pos));
+                self.playback.elapsed = new_pos;
+                self.mpris_emit_seek(new_pos);
+                return;
+            }
+            SetPosition {
+                track_path,
+                position_micros,
+            } => {
+                let Some(song) = self.playback.current_song.as_ref() else {
+                    return;
+                };
+                let expected = crate::mpris::dbus_track_path_for_song_id(&song.id);
+                if track_path != expected {
+                    return;
+                }
+                let mut new_pos = std::time::Duration::from_micros(position_micros.max(0) as u64);
+                if let Some(total) = self.playback.total {
+                    new_pos = new_pos.min(total);
+                }
+                let _ = self.player_tx.send(PlayerCommand::Seek(new_pos));
+                self.playback.elapsed = new_pos;
+                self.mpris_emit_seek(new_pos);
+                return;
+            }
+            SetVolume(v) => {
+                let pct = (v.clamp(0.0, 1.0) * 100.0).round() as u8;
+                self.config.default_volume = pct;
+                let _ = self
+                    .player_tx
+                    .send(PlayerCommand::SetVolume(self.config.default_volume as f32 / 100.0));
+            }
+            Quit => {
+                self.dispatch(Action::Quit);
+                return;
+            }
+        }
+        self.mpris_emit_props();
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn handle_mpris_control(&mut self, _c: crate::mpris::MprisControl) {}
 
     /// Send a PlayUrl command for the song the queue cursor points at.
     fn play_current(&mut self) {
@@ -1222,6 +1394,7 @@ impl App {
     // ── Action dispatch ───────────────────────────────────────────────────────
 
     pub fn dispatch(&mut self, action: Action) {
+        let mpris_action_hook = action.clone();
         match action {
             Action::ToggleHelp => {
                 let was_visible = self.help_visible;
@@ -1594,6 +1767,8 @@ impl App {
             }
             Action::None => {}
         }
+        #[cfg(target_os = "linux")]
+        self.mpris_after_action(&mpris_action_hook);
     }
 
     // ── Pending artist pre-selection ──────────────────────────────────────────
