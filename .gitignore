@@ -1,2 +1,6 @@
 /target/
 docs/CONTEXT.md
+
+# Logs
+*.log
+logs/
